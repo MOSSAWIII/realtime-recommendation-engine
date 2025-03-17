@@ -1,0 +1,41 @@
+%% Diagramme de Dépendance Fonctionnelle (DDF)
+%% Ce diagramme identifie les entités principales du système et leurs attributs fondamentaux,
+%% servant de base pour l'élaboration du MCD puis du MPD dans notre processus de modélisation.
+%% Les relations entre Utilisateur, Événement, Réseau d'Amis et Participations représentent
+%% la structure de données nécessaire au fonctionnement du moteur de recommandation.
+graph TD
+    subgraph UTILISATEUR
+        direction TB
+        user_id --> locale
+        user_id --> birthyear
+        user_id --> gender
+        user_id --> joinedAt
+        user_id --> location
+        user_id --> timezone
+    end
+    
+    subgraph EVENEMENT
+        direction TB
+        event_id --> user_id
+        event_id --> start_time
+        event_id --> city
+        event_id --> state
+        event_id --> zip
+        event_id --> country
+        event_id --> lat
+        event_id --> lng
+        event_id --> c_range["c_1 ... c_100 & c_other"]
+    end
+    
+    subgraph RESEAU_AMIS
+        direction TB
+        user_id --> friends_list
+    end
+    
+    subgraph PARTICIPATION_EVENEMENT
+        direction TB
+        event_id --> yes_list
+        event_id --> maybe_list
+        event_id --> invited_list
+        event_id --> no_list
+    end

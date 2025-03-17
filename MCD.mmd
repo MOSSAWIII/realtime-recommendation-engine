@@ -1,3 +1,9 @@
+%% Modèle Conceptuel de Données (MCD) pour un système de gestion d'événements sociaux
+%% Ce diagramme représente la structure de base de données d'une plateforme permettant aux utilisateurs
+%% de créer des événements, d'inviter des amis et de gérer les participations.
+%% Les entités principales sont: UTILISATEUR, EVENEMENT, RESEAU_AMIS et PARTICIPATION_EVENEMENT,
+%% reliées entre elles par différentes relations exprimant la logique métier de l'application.
+
 erDiagram
     UTILISATEUR {
         int user_id PK
@@ -20,6 +26,7 @@ erDiagram
         decimal lat
         decimal lng
         int c_1
+        int c_2_to_99
         int c_100
         int c_other
     }
