@@ -41,3 +41,24 @@ erDiagram
     UTILISATEUR ||--|| RESEAU_AMIS : "possède"
     EVENEMENT ||--|| PARTICIPATION_EVENEMENT : "a"
     UTILISATEUR }o--o{ EVENEMENT : "participe via PARTICIPATION_EVENEMENT"
+
+    %% Ce commentaire de documentation explique les symboles utilisés pour définir les relations entre les tables.
+    %% 
+    %% Les symboles "||", "o{" et "}o" indiquent la cardinalité (le nombre d'occurrences) dans la relation.
+    %% 
+    %% - "||" représente une cardinalité stricte à une occurence (exactement un).
+    %% - "o{" ou "}{", représente zéro ou plusieurs occurences (optionnel et multiple).
+    %% 
+    %% Par exemple:
+    %%   • Dans "UTILISATEUR ||--o{ EVENEMENT : 'crée'", 
+    %%     "UTILISATEUR" est relié à "EVENEMENT" par une relation de type 1-à-plusieurs (un utilisateur peut créer plusieurs événements).
+    %% 
+    %%   • Dans "UTILISATEUR ||--|| RESEAU_AMIS : 'possède'",
+    %%     les deux tables participent à une relation 1-à-1 (chaque utilisateur a un et un seul réseau d'amis, et inversement).
+    %% 
+    %%   • Dans "EVENEMENT ||--|| PARTICIPATION_EVENEMENT : 'a'",
+    %%     il s'agit d'une relation 1-à-1 entre un événement et sa participation spécifique, indiquant une présence unique dans ce contexte.
+    %% 
+    %%   • Dans "UTILISATEUR }o--o{ EVENEMENT : 'participe via PARTICIPATION_EVENEMENT'",
+    %%     les symboles en accolade "o" aux deux extrémités indiquent une relation de type plusieurs-à-plusieurs,
+    %%     c'est-à-dire qu'un utilisateur peut participer à plusieurs événements et un événement peut avoir plusieurs utilisateurs participants.

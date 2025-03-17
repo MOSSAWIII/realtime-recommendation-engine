@@ -1,0 +1,59 @@
+%% Ce diagramme ER utilise la syntaxe Mermaid pour représenter de manière visuelle
+%% la structure d'une base de données. Il définit principalement deux entités :
+%% UTILISATEUR et EVENEMENT.
+%% - UTILISATEUR contient les attributs liés aux informations d'un utilisateur,
+%%   tels que son identifiant, sa locale, sa date d'inscription, etc.
+%% - EVENEMENT regroupe les données liées aux événements associés à un utilisateur,
+%%   en indiquant notamment la date de début, l'emplacement et divers compteurs.
+%% Chaque entité précise aussi certaines contraintes comme les clés primaires,
+%% les clés étrangères et les index, qui facilitent la gestion et l'optimisation des requêtes sur la base de données.
+
+erDiagram
+    UTILISATEUR {
+        int(11) user_id PK "NOT NULL AUTO_INCREMENT"
+        varchar(10) locale "NOT NULL"
+        float birthyear "NULL"
+        varchar(10) gender "NULL"
+        datetime joinedAt "NOT NULL"
+        varchar(100) location "NULL"
+        int timezone "NOT NULL"
+        index idx_location "BTREE (location)"
+    }
+    
+    EVENEMENT {
+        int(11) event_id PK "NOT NULL AUTO_INCREMENT"
+        int(11) user_id FK "NOT NULL"
+        datetime start_time "NOT NULL"
+        varchar(50) city "NULL" 
+        varchar(50) state "NULL"
+        varchar(20) zip "NULL"
+        varchar(50) country "NULL"
+        decimal lat "NULL"
+        decimal lng "NULL"
+        int c_1 "NOT NULL DEFAULT 0"
+        int c_100 "NOT NULL DEFAULT 0"
+        int c_other "NOT NULL DEFAULT 0"
+        index idx_user "BTREE (user_id)"
+        index idx_time "BTREE (start_time)"
+        index idx_location "BTREE (country, city)"
+    }
+    
+    RESEAU_AMIS {
+        int(11) user_id PK,FK "NOT NULL"
+        text friends_list "NOT NULL"
+        fulltext idx_friends "FULLTEXT (friends_list)"
+    }
+    
+    PARTICIPATION_EVENEMENT {
+        int(11) event_id PK,FK "NOT NULL"
+        text yes_list "NULL"
+        text maybe_list "NULL"
+        text invited_list "NULL"
+        text no_list "NULL"
+        fulltext idx_participation "FULLTEXT (yes_list, invited_list)"
+    }
+    
+    UTILISATEUR ||--o{ EVENEMENT : "crée"
+    UTILISATEUR ||--|| RESEAU_AMIS : "possède"
+    EVENEMENT ||--|| PARTICIPATION_EVENEMENT : "a"
+    
