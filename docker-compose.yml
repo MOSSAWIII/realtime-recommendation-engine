@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  recommendation-engine:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./database:/app/database
+      - ./docs:/app/docs
+    environment:
+      - SCALA_ENV=production
