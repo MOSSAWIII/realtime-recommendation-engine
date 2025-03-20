@@ -1,0 +1,2 @@
+// Add plugins asneeded
+addSbtPlugin("ch.epfl.scala" % "sbt-bloop" % "1.5.8")
