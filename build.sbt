@@ -4,5 +4,8 @@ scalaVersion := "2.13.8"
 
 libraryDependencies ++= Seq(
   "com.github.tototoshi" %% "scala-csv" % "1.3.10",
-  "org.json4s" %% "json4s-native" % "4.0.6"
+  "org.json4s" %% "json4s-native" % "4.0.6",
+  "org.postgresql" % "postgresql" % "42.6.0",
+  "com.typesafe.slick" %% "slick" % "3.4.1",
+  "com.typesafe.slick" %% "slick-hikaricp" % "3.4.1"
 )
