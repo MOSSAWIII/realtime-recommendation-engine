@@ -1,100 +1,254 @@
-import java.time.LocalDateTime
+package core
 
-object RecommendationEngine {
+import models._
+import repositories._
+import config.RabbitMQConfig
+import scala.concurrent.{ExecutionContext, Future}
+import java.time.LocalDateTime
+import com.rabbitmq.client.AMQP.BasicProperties
+import io.circe.parser._
+import io.circe.syntax._
+import io.circe.generic.auto._
+import java.nio.charset.StandardCharsets
+import com.rabbitmq.client.{DeliverCallback, CancelCallback}
+import java.util.UUID
+
+class RecommendationEngine(
+  userRepo: UserRepository,
+  eventRepo: EventRepository,
+  participationRepo: ParticipationRepository,
+  friendsRepo: FriendsRepository,
+  interactionRepo: InteractionRepository,
+  cacheManager: CacheManager
+)(implicit ec: ExecutionContext) {
   
-  def getRecommendations(userId: Int, count: Int = 5): List[Event] = {
-    val events = DataLoader.loadEvents()
-    val users = DataLoader.loadUsers()
-    val userOpt = users.find(_.userId == userId)
-    val userInteractionOpt = UserInteractionService.getUserInteraction(userId)
+  private val channel = RabbitMQConfig.createChannel()
+  private val requestQueueName = RabbitMQConfig.Queues.RECOMMENDATION_REQUESTS
+  private val resultExchange = RabbitMQConfig.Exchanges.RECOMMENDATIONS
+  
+  // Start listening for recommendation requests
+  def startRequestConsumer(): Unit = {
+    val deliverCallback = new DeliverCallback {
+      override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
+        val message = new String(delivery.getBody, StandardCharsets.UTF_8)
+        decode[RecommendationRequest](message) match {
+          case Right(request) =>
+            // Process recommendation request
+            generateRecommendations(request.userId, request.count)
+              .map(recommendations => {
+                // Publish results back
+                val result = RecommendationResult(
+                  requestId = request.requestId,
+                  userId = request.userId,
+                  recommendations = recommendations
+                )
+                publishResult(result)
+              })
+          case Left(error) =>
+            println(s"Error decoding recommendation request: ${error.getMessage}")
+        }
+        channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
+      }
+    }
     
-    if (userInteractionOpt.isEmpty) {
-      // Pour les nouveaux utilisateurs, recommandations basées sur la localisation et la popularité
-      val userLocation = userOpt.flatMap(_.location).map(extractCity)
-      events
-        .filter(event => userLocation.forall(loc => 
-          event.city.exists(_.equalsIgnoreCase(loc))))
-        .sortBy(event => {
-          val keywordSum = event.keywordFrequencies.values.sum // Utilisation de la somme des fréquences comme indicateur de popularité
-          -keywordSum // Tri décroissant
-        })
-        .take(count)
-    } else {
-      // Pour les utilisateurs avec des interactions
-      val interaction = userInteractionOpt.get
-      
-      // Calcul des scores pour chaque événement
-      val eventScores = events.map { event =>
-        val contentScore = calculateContentScore(event, interaction)
-        val proximityScore = calculateProximityScore(event, interaction)
-        val timeScore = calculateTimeScore(event, interaction)
-        val popularityScore = calculatePopularityScore(event)
+    channel.basicConsume(requestQueueName, false, deliverCallback,
+      consumerTag => println(s"Recommendation request consumer cancelled: $consumerTag"))
+  }
+  
+  // Generate recommendations asynchronously
+  def generateRecommendations(userId: Long, count: Int = 5): Future[List[Event]] = {
+    // First check cache
+    cacheManager.getRecommendation(userId).flatMap {
+      case Some(cachedRecommendations) => 
+        Future.successful(cachedRecommendations)
         
-        // Score total pondéré
-        val totalScore = (contentScore * 0.4) + 
-                        (proximityScore * 0.3) + 
-                        (timeScore * 0.2) + 
-                        (popularityScore * 0.1)
-                        
+      case None =>
+        // Get user data
+        for {
+          userOpt <- userRepo.findById(userId)
+          interactions <- interactionRepo.findByUserId(userId)
+          userFriends <- friendsRepo.findFriendsByUserId(userId)
+          
+          result <- userOpt match {
+            case None =>
+              Future.successful(List.empty[Event])
+              
+            case Some(user) =>
+              // Core recommendation logic
+              for {
+                // Find events friends are attending
+                friendEvents <- findFriendsEvents(userFriends)
+                
+                // Find events based on past interactions
+                interactionEvents <- findEventsBasedOnInteractions(interactions)
+                
+                // Find events based on location
+                locationEvents <- findEventsNearUser(user)
+                
+                // Combine all sources and apply weights
+                allEvents <- combineEventSources(friendEvents, interactionEvents, locationEvents)
+                
+                // Get final list of top events
+                futureEvents <- filterFutureEvents(allEvents, count)
+              } yield {
+                // Cache the results
+                cacheManager.cacheRecommendation(userId, futureEvents.toList)
+                futureEvents.toList
+              }
+          }
+        } yield result
+    }
+  }
+  
+  // Request recommendations asynchronously
+  def requestRecommendationsAsync(userId: Long, count: Int = 5): Future[String] = {
+    val request = RecommendationRequest(
+      requestId = UUID.randomUUID().toString,
+      userId = userId,
+      count = count,
+      timestamp = LocalDateTime.now()
+    )
+    
+    Future {
+      try {
+        val props = new BasicProperties.Builder()
+          .contentType("application/json")
+          .build()
+        
+        channel.basicPublish(
+          resultExchange,
+          "request",
+          props,
+          request.asJson.noSpaces.getBytes(StandardCharsets.UTF_8)
+        )
+        
+        request.requestId
+      } catch {
+        case e: Exception =>
+          throw new RuntimeException(s"Failed to request recommendations: ${e.getMessage}", e)
+      }
+    }
+  }
+  
+  private def publishResult(result: RecommendationResult): Unit = {
+    try {
+      val props = new BasicProperties.Builder()
+        .contentType("application/json")
+        .build()
+      
+      channel.basicPublish(
+        resultExchange,
+        "result",
+        props,
+        result.asJson.noSpaces.getBytes(StandardCharsets.UTF_8)
+      )
+      
+      println(s"Published recommendation result for request ${result.requestId}")
+    } catch {
+      case e: Exception =>
+        println(s"Error publishing recommendation result: ${e.getMessage}")
+    }
+  }
+  
+  // Helper methods for recommendation generation
+  private def findFriendsEvents(userFriends: Seq[Long]): Future[Seq[Event]] = {
+    if (userFriends.isEmpty) {
+      Future.successful(Seq.empty)
+    } else {
+      for {
+        friendsParticipations <- Future.sequence(
+          userFriends.map(friendId => participationRepo.findEventsByUserId(friendId))
+        )
+        eventIds = friendsParticipations.flatten.distinct
+        events <- eventRepo.findByIds(eventIds)
+      } yield events
+    }
+  }
+  
+  private def findEventsBasedOnInteractions(interactions: Seq[UserInteraction]): Future[Seq[Event]] = {
+    if (interactions.isEmpty) {
+      Future.successful(Seq.empty)
+    } else {
+      val interactionEventIds = interactions
+        .filter(i => i.status == "yes" || i.status == "maybe") // Only consider positive interactions
+        .map(_.eventId)
+        .distinct
+        
+      // Get these events to find similar ones
+      eventRepo.findByIds(interactionEventIds).flatMap { previousEvents =>
+        // Extract keywords (you'd need to implement this based on your data)
+        val keywords = previousEvents.flatMap(event => 
+          event.keywordFrequencies.keys.toSeq.sortBy(-event.keywordFrequencies(_)).take(5)
+        ).distinct
+        
+        if (keywords.isEmpty) {
+          Future.successful(Seq.empty)
+        } else {
+          eventRepo.findByKeywords(keywords)
+        }
+      }
+    }
+  }
+  
+  private def findEventsNearUser(user: User): Future[Seq[Event]] = {
+    user.location match {
+      case Some(location) =>
+        // Simple location matching (would need to be enhanced for real-world use)
+        eventRepo.findByLocation(location)
+      case None =>
+        Future.successful(Seq.empty)
+    }
+  }
+  
+  private def combineEventSources(
+    friendEvents: Seq[Event], 
+    interactionEvents: Seq[Event], 
+    locationEvents: Seq[Event]
+  ): Future[Seq[(Event, Double)]] = {
+    // Combine and score events from different sources
+    // This is a simplified implementation
+    val allEvents = (friendEvents ++ interactionEvents ++ locationEvents).distinct
+    
+    Future.successful(
+      allEvents.map { event =>
+        val socialScore = if (friendEvents.contains(event)) 1.5 else 1.0
+        val interactionScore = if (interactionEvents.contains(event)) 1.3 else 1.0
+        val locationScore = if (locationEvents.contains(event)) 1.2 else 1.0
+        
+        val totalScore = socialScore * interactionScore * locationScore
         (event, totalScore)
       }
-      
-      // Trier par score et prendre les N premiers
-      eventScores.sortBy(-_._2).map(_._1).take(count)
+    )
+  }
+  
+  private def filterFutureEvents(scoredEvents: Seq[(Event, Double)], count: Int): Future[Seq[Event]] = {
+    val now = LocalDateTime.now()
+    Future.successful(
+      scoredEvents
+        .filter(_._1.startTime.isAfter(now))
+        .sortBy(-_._2)
+        .take(count)
+        .map(_._1)
+    )
+  }
+  
+  def close(): Unit = {
+    if (channel.isOpen) {
+      channel.close()
     }
-  }
-  
-  // Extraction de la ville à partir d'une chaîne de localisation
-  private def extractCity(location: String): String = {
-    location.split(",").headOption.getOrElse("").trim
-  }
-  
-  // Calculer le score basé sur le contenu (fréquences de mots-clés vs recherche)
-  private def calculateContentScore(event: Event, interaction: UserInteraction): Double = {
-    interaction.searchQuery match {
-      case None => 0.0
-      case Some(query) =>
-        // Convertir la requête en ensemble de mots
-        val queryWords = query.toLowerCase.split("\\s+").toSet
-        
-        // Calculer le score basé sur les fréquences des mots-clés
-        val matchingKeywords = event.keywordFrequencies.filter { case (keywordId, freq) =>
-          // Ici, vous devriez avoir une map de correspondance entre keywordId et mot réel
-          // Pour l'instant, on utilise juste la présence de fréquence comme indicateur
-          freq > 0
-        }
-        
-        val totalFrequency = matchingKeywords.values.sum.toDouble
-        val normalizedScore = if (totalFrequency > 0) 
-          math.min(1.0, totalFrequency / 100.0) else 0.0
-        
-        normalizedScore
-    }
-  }
-  
-  // Calculer le score de proximité géographique
-  private def calculateProximityScore(event: Event, interaction: UserInteraction): Double = {
-    interaction.currentLocation match {
-      case None => 0.0
-      case Some(location) =>
-        val city = extractCity(location)
-        if (event.city.exists(_.equalsIgnoreCase(city))) 1.0 else 0.0
-    }
-  }
-  
-  // Calculer le score selon la période temporelle
-  private def calculateTimeScore(event: Event, interaction: UserInteraction): Double = {
-    interaction.timeRange match {
-      case None => 0.5  // Score neutre si aucune préférence de temps
-      case Some((start, end)) =>
-        if (event.startTime.isAfter(start) && event.startTime.isBefore(end)) 1.0
-        else 0.0
-    }
-  }
-  
-  // Calculer le score de popularité basé sur les fréquences de mots-clés
-  private def calculatePopularityScore(event: Event): Double = {
-    val totalFrequency = event.keywordFrequencies.values.sum.toDouble
-    math.min(1.0, totalFrequency / 1000.0) // Normalisation avec un maximum de 1.0
   }
 }
+
+// Message types for recommendation requests and responses
+case class RecommendationRequest(
+  requestId: String,
+  userId: Long,
+  count: Int,
+  timestamp: LocalDateTime
+)
+
+case class RecommendationResult(
+  requestId: String,
+  userId: Long,
+  recommendations: List[Event]
+)

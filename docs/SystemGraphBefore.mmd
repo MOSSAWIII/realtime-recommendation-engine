@@ -1,0 +1,44 @@
+graph TD
+    subgraph "Configuration"
+        DB[DatabaseConfig]
+    end
+
+    subgraph "Models"
+        M1[Event]
+        M2[User]
+        M3[UserInteraction]
+        M4[UserParticipation]
+        M5[UserFriends]
+        DB_TABLES[Database Tables]
+    end
+
+    subgraph "Core Components"
+        DL[DataLoader]
+        UIS[UserInteractionService]
+        RE[RecommendationEngine]
+        MAIN[Main]
+    end
+
+    %% Data flows
+    DL -->|loads| M1
+    DL -->|loads| M2
+    DL -->|loads| M4
+    DL -->|loads| M5
+    
+    UIS -->|manages| M3
+    
+    MAIN -->|initializes| DL
+    MAIN -->|uses| UIS
+    MAIN -->|requests recommendations| RE
+    
+    RE -->|accesses| UIS
+    RE -->|analyzes| M1
+    RE -->|analyzes| M2
+    RE -->|analyzes| M3
+    
+    DB <-->|configures| DB_TABLES
+
+    %% External components
+    CSV[(CSV Files)] -->|data source| DL
+    USER((User)) -->|interactions| UIS
+    RE -->|recommendations| USER

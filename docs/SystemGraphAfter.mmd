@@ -1,0 +1,25 @@
+flowchart LR
+    %% Data Sources
+    UserEvents[User Events] --> EventCollector
+    DatabaseData[Database Data] --> DataLoader
+    
+    %% Data Ingestion
+    EventCollector --> Queue[Event Queue]
+    Queue --> UserInteractionService
+    DataLoader --> Cache[Cache Layer]
+    
+    %% Processing
+    UserInteractionService --> InteractionRepo[Interaction Repository]
+    InteractionRepo --> RecEngine[Recommendation Engine]
+    Cache --> RecEngine
+    
+    %% Repositories that feed the engine
+    UserRepo[User Repository] --> RecEngine
+    EventRepo[Event Repository] --> RecEngine
+    ParticipationRepo[Participation Repository] --> RecEngine
+    FriendsRepo[Friends Repository] --> RecEngine
+    
+    %% Output
+    RecEngine --> RecResults[Recommendation Results]
+    RecResults --> APIService[API Service]
+    RecResults --> NotificationService[Notification Service]

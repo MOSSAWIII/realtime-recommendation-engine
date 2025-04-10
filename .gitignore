@@ -1,23 +1,72 @@
+### Scala/SBT ###
 *.class
 *.log
-*.tmp
-*.bak
-*.swp
-*~
-.*.swp
-.DS_Store
-.metals/
-.vscode/
-.bloop/
-.bsp/
 target/
 project/target/
 project/project/
-database/*.csv
-node_modules/
-*.vsix
-.idea/
+.bsp/
+.bloop/
+.metals/
 metals.sbt
 .cache/
 .history/
+
+### Data Files ###
+database/*.csv
+logs/
+*.csv
+import_log.txt
+
+### IDEs and Editors ###
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+*.sublime-workspace
+*.sublime-project
+*.vsix
+*.swp
+*~
+.*.swp
+
+### OS Generated Files ###
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+### Temporary Files ###
+*.tmp
+*.bak
+*.swp
+tmp/
+temp/
+
+### Package Files ###
+*.jar
+*.war
+*.ear
 dist/
+
+### Node.js ###
+node_modules/
+npm-debug.log
+
+### Docker ###
+.docker/
+docker-volumes/
+
+### Redis ###
+*.rdb
+dump.rdb
+
+### Local Configuration ###
+.env
+*.conf.local
