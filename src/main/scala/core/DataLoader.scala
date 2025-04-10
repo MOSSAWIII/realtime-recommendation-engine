@@ -11,6 +11,7 @@ import io.circe.parser._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
 import scala.util.{Try, Success, Failure}
+import org.slf4j.LoggerFactory
 
 class DataLoader(
   userRepo: UserRepository,
@@ -19,6 +20,31 @@ class DataLoader(
   friendsRepo: FriendsRepository,
   cacheManager: CacheManager
 )(implicit ec: ExecutionContext) {
+  
+  private val logger = LoggerFactory.getLogger(getClass)
+  
+  // Helper method for detailed error logging
+  private def logError(message: String, error: Throwable): Unit = {
+    logger.error(s"$message: ${error.getMessage}")
+    logger.debug("Stack trace:", error)
+    
+    // Also print to console for Docker logs visibility
+    println(s"ERROR: $message: ${error.getMessage}")
+    error.printStackTrace()
+  }
+  
+  private def verifyDatabaseConnection(): Boolean = {
+    try {
+      logger.info("Verifying database connection...")
+      val result = Await.result(db.run(sql"SELECT 1".as[Int]), 5.seconds)
+      logger.info("Database connection verified successfully")
+      true
+    } catch {
+      case e: Exception =>
+        logError("Failed to verify database connection", e)
+        false
+    }
+  }
   
   // Cache pour les données chargées
   private var users: Seq[User] = Seq.empty
@@ -34,26 +60,41 @@ class DataLoader(
   
   def loadAll(): Unit = {
     try {
+      logger.info("Loading users from database...")
       users = Await.result(userRepo.findAll(), 30.seconds)
-      println(s"Utilisateurs chargés: ${users.size}")
+      logger.info(s"Users loaded successfully: ${users.size} records")
     } catch {
+      case e: java.sql.SQLException => 
+        logError("Database error while loading users", e)
+        users = Seq.empty
+      case e: java.util.concurrent.TimeoutException =>
+        logError("Timeout waiting for user data", e)
+        users = Seq.empty
       case e: Exception => 
-        println(s"Erreur lors du chargement des utilisateurs: ${e.getMessage}")
+        logError("Unexpected error while loading users", e)
         users = Seq.empty
     }
     
     try {
+      logger.info("Loading future events from database...")
       events = Await.result(eventRepo.findFutureEvents(), 30.seconds)
-      println(s"Événements chargés: ${events.size}")
+      logger.info(s"Events loaded successfully: ${events.size} records")
     } catch {
+      case e: java.sql.SQLException => 
+        logError("Database error while loading events", e)
+        events = Seq.empty
+      case e: java.util.concurrent.TimeoutException =>
+        logError("Timeout waiting for event data", e)
+        events = Seq.empty
       case e: Exception => 
-        println(s"Erreur lors du chargement des événements: ${e.getMessage}")
+        logError("Unexpected error while loading events", e)
         events = Seq.empty
     }
     
-    // Chargement des compteurs de participation
+    // Enhanced logging for participation counts
     participationCountByEvent = Map.empty
     if (events.nonEmpty) {
+      logger.info(s"Loading participation counts for ${events.size} events...")
       try {
         val eventIds = events.map(_.eventId)
         participationCountByEvent = eventIds.map { eventId =>
@@ -62,37 +103,50 @@ class DataLoader(
             eventId -> count
           } catch {
             case e: Exception =>
-              println(s"Erreur lors du chargement des participations pour l'événement $eventId: ${e.getMessage}")
+              logError(s"Failed to load participation count for event $eventId", e)
               eventId -> 0
           }
         }.toMap
+        logger.info(s"Loaded participation counts for ${participationCountByEvent.size} events")
       } catch {
         case e: Exception =>
-          println(s"Erreur lors du chargement des compteurs de participation: ${e.getMessage}")
+          logError("Failed to load participation counts", e)
       }
+    } else {
+      logger.info("No events to load participation counts for")
     }
     
-    // Chargement des amis
+    // Friendship loading with enhanced error logging
     friendsByUser = Map.empty
     if (users.nonEmpty) {
+      logger.info(s"Loading friendships for ${users.size} users...")
       try {
         friendsByUser = users.map { user =>
           try {
             val friendIds = Await.result(friendsRepo.findFriendsByUserId(user.userId), 10.seconds)
+            if (friendIds.nonEmpty) {
+              logger.debug(s"User ${user.userId} has ${friendIds.size} friends")
+            }
             user.userId -> friendIds
           } catch {
             case e: Exception =>
-              println(s"Erreur lors du chargement des amis pour l'utilisateur ${user.userId}: ${e.getMessage}")
+              logError(s"Failed to load friends for user ${user.userId}", e)
               user.userId -> Seq.empty[Long]
           }
         }.toMap
+        logger.info(s"Loaded friendship data for ${friendsByUser.size} users")
       } catch {
         case e: Exception =>
-          println(s"Erreur lors du chargement des relations d'amitié: ${e.getMessage}")
+          logError("Failed to load friendship relationships", e)
       }
+    } else {
+      logger.info("No users to load friendship data for")
     }
-    
-    println(s"Données chargées: ${users.size} utilisateurs, ${events.size} événements")
+
+    // Final summary with diagnostic information
+    val emptyFriendships = friendsByUser.count(_._2.isEmpty)
+    logger.info(s"Data loading complete: ${users.size} users, ${events.size} events, ${participationCountByEvent.size} participation counts")
+    logger.info(s"Friendship stats: ${friendsByUser.size} users mapped, $emptyFriendships users with no friends")
   }
   
   // Méthode asynchrone pour le chargement
@@ -158,7 +212,7 @@ class DataLoader(
   
   private def startUserConsumer(): Unit = {
     val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare("user_updates", true, false, false, null)
+    channel.queueDeclare(RabbitMQConfig.Queues.USER_INTERACTIONS, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -170,7 +224,7 @@ class DataLoader(
             cacheManager.cacheUser(user)
             println(s"Received user update for ${user.userId}")
           case Left(error) =>
-            println(s"Error decoding user message: ${error.getMessage}")
+            logError("Error decoding user message", error)
         }
         channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
@@ -181,13 +235,13 @@ class DataLoader(
         println(s"User consumer cancelled: $consumerTag")
     }
     
-    channel.basicConsume("user_updates", false, deliverCallback, cancelCallback)
+    channel.basicConsume(RabbitMQConfig.Queues.USER_INTERACTIONS, false, deliverCallback, cancelCallback)
     userChannel = Some(channel)
   }
   
   private def startEventConsumer(): Unit = {
     val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare("event_updates", true, false, false, null)
+    channel.queueDeclare(RabbitMQConfig.Queues.EVENT_UPDATES, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -199,7 +253,7 @@ class DataLoader(
             cacheManager.cacheEvent(event)
             println(s"Received event update for ${event.eventId}")
           case Left(error) =>
-            println(s"Error decoding event message: ${error.getMessage}")
+            logError("Error decoding event message", error)
         }
         channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
@@ -210,12 +264,11 @@ class DataLoader(
         println(s"Event consumer cancelled: $consumerTag")
     }
     
-    channel.basicConsume("event_updates", false, deliverCallback, cancelCallback)
+    channel.basicConsume(RabbitMQConfig.Queues.EVENT_UPDATES, false, deliverCallback, cancelCallback)
     eventChannel = Some(channel)
   }
   
   private def startParticipationConsumer(): Unit = {
-    // Similar implementation for participation updates
     val channel = RabbitMQConfig.createChannel()
     channel.queueDeclare("participation_updates", true, false, false, null)
     
@@ -229,7 +282,7 @@ class DataLoader(
             cacheManager.invalidateEvent(participation.eventId)
             println(s"Received participation update for event ${participation.eventId}")
           case Left(error) =>
-            println(s"Error decoding participation message: ${error.getMessage}")
+            logError("Error decoding participation message", error)
         }
         channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
@@ -241,7 +294,6 @@ class DataLoader(
   }
   
   private def startFriendshipConsumer(): Unit = {
-    // Implementation for friendship updates
     val channel = RabbitMQConfig.createChannel()
     channel.queueDeclare("friendship_updates", true, false, false, null)
     
@@ -255,7 +307,7 @@ class DataLoader(
             cacheManager.invalidateUserRecommendations(friendship.userId)
             println(s"Received friendship update for user ${friendship.userId}")
           case Left(error) =>
-            println(s"Error decoding friendship message: ${error.getMessage}")
+            logError("Error decoding friendship message", error)
         }
         channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }

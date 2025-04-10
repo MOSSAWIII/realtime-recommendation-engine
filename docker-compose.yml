@@ -9,12 +9,15 @@ services:
       - ./database:/app/database
       - ./docs:/app/docs
     depends_on:
-      - db
-      - rabbitmq
-      - redis
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - SCALA_ENV=production
-      - DATABASE_URL=jdbc:postgresql://db:5432/recommendation_system
+      - DATABASE_URL=jdbc:postgresql://db:5432/recommendation_engine
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=password
       - RABBITMQ_HOST=rabbitmq
@@ -35,17 +38,16 @@ services:
   db:
     image: postgres:14
     environment:
-      POSTGRES_DB: recommendation_system
-      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
+      POSTGRES_DB: recommendation_engine
     volumes:
-      - ./sql-tables:/docker-entrypoint-initdb.d
       - postgres_data:/var/lib/postgresql/data
+      - ./sql-tables:/docker-entrypoint-initdb.d 
     ports:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
