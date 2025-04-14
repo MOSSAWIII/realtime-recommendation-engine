@@ -1,0 +1,58 @@
+graph TD
+    subgraph "Application Layer"
+        API[HTTP API Layer]
+        DL[Data Loader]
+        UI[User Interaction Service]
+        RE[Recommendation Engine]
+        CM[Cache Manager]
+    end
+
+    subgraph "Messaging Layer"
+        RMQ_D[RabbitMQ Data]
+        RMQ_I[RabbitMQ Interactions]
+        RMQ_R[RabbitMQ Recommendations]
+    end
+
+    subgraph "Persistence Layer"
+        DB[(PostgreSQL)]
+        CACHE[(Redis Cache)]
+    end
+
+    subgraph "Data Model"
+        Users
+        Events
+        Interactions
+        Friends
+        Participations
+    end
+
+    %% Connections between application components and messaging
+    DL <--> RMQ_D
+    UI <--> RMQ_I
+    RE <--> RMQ_R
+    
+    %% Connections to persistence layer
+    API --> DB
+    DL --> DB
+    UI --> DB
+    RE --> DB
+    
+    CM <--> CACHE
+    RE <--> CM
+    
+    %% Data model relationships
+    DB --- Users
+    DB --- Events
+    DB --- Interactions
+    DB --- Friends
+    DB --- Participations
+
+    %% Client connection
+    Client[Client Applications] --> API
+    
+    %% Show primary data flow
+    Client --> UI
+    UI --> RE
+    RE --> CM
+    CM --> API
+    API --> Client
