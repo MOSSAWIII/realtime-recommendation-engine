@@ -30,9 +30,16 @@ object RabbitMQConfig {
     }
   }
   
-  // Queues définies
+  // Queues standardisées
   object Queues {
+    // Queues d'événements
     val USER_EVENTS = "user_events"
     val RECOMMENDATIONS = "recommendations"
+    
+    // Queues de mise à jour des données
+    val USER_INTERACTIONS = "user_interactions"
+    val EVENT_UPDATES = "event_updates"
+    val PARTICIPATION_UPDATES = "participation_updates"
+    val FRIENDSHIP_UPDATES = "friendship_updates"
   }
 }

@@ -7,7 +7,7 @@ COPY project/plugins.sbt project/
 COPY build.sbt .
 
 COPY src/ src/
-COPY resources/ resources/
+COPY src/main/resources/ resources/
 
 RUN sbt clean compile
 

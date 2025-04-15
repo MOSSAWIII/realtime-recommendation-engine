@@ -7,12 +7,24 @@ import io.circe.parser._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
 import scala.concurrent.{ExecutionContext, Future}
+import org.slf4j.LoggerFactory
 
+/**
+ * Consumer responsable du traitement des événements utilisateur en temps réel.
+ * 
+ * Ce consumer écoute la queue USER_EVENTS qui contient les interactions utilisateur
+ * brutes (clics, vues, etc.) et les transmet au Transformer pour générer
+ * des recommandations en temps réel.
+ * 
+ * Rôle dans le pipeline:
+ * [Événements user] → [RabbitMQ (StreamingConsumer)] → [Service de transformation]
+ */
 class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext) {
+  private val logger = LoggerFactory.getLogger(getClass)
   private var channel = RabbitMQConfig.createChannel()
   
   def start(): Unit = {
-    println("Démarrage du consumer d'événements utilisateur...")
+    logger.info("Démarrage du consumer d'événements utilisateur...")
     
     // Déclaration de la queue pour les événements utilisateur
     channel.queueDeclare(RabbitMQConfig.Queues.USER_EVENTS, true, false, false, null)
@@ -24,15 +36,16 @@ class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext)
         // Décodage de l'événement JSON
         decode[UserEvent](message) match {
           case Right(event) =>
-            println(s"Événement reçu: $event")
+            logger.debug(s"Événement reçu: $event")
             
             // Transmission au transformer pour traitement
             transformer.processEvent(event).foreach { processedEvent =>
-              println(s"Événement traité: $processedEvent")
+              logger.info(s"Événement traité pour l'utilisateur ${event.userId}")
+              logger.debug(s"Détails: $processedEvent")
             }
             
           case Left(error) =>
-            println(s"Erreur de décodage: ${error.getMessage}")
+            logger.error(s"Erreur de décodage: ${error.getMessage}", error)
         }
         
         // Accusé de réception
@@ -42,17 +55,18 @@ class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext)
     
     val cancelCallback = new CancelCallback {
       override def handle(consumerTag: String): Unit = 
-        println(s"Consumer annulé: $consumerTag")
+        logger.warn(s"Consumer annulé: $consumerTag")
     }
     
     // Démarrage de la consommation
     channel.basicConsume(RabbitMQConfig.Queues.USER_EVENTS, false, deliverCallback, cancelCallback)
-    println("Consumer d'événements démarré avec succès")
+    logger.info("Consumer d'événements démarré avec succès")
   }
   
   def close(): Unit = {
     if (channel != null && channel.isOpen) {
       channel.close()
+      logger.info("StreamingConsumer channel closed")
     }
   }
 }

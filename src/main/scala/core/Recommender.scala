@@ -7,13 +7,22 @@ import scala.concurrent.{ExecutionContext, Future}
 import io.circe.syntax._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
+import org.slf4j.LoggerFactory
 
 class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
-  
+  private val logger = LoggerFactory.getLogger(getClass)
   private val publishChannel = RabbitMQConfig.createChannel()
   
   // Déclaration de la queue de sortie pour les recommandations
   publishChannel.queueDeclare(RabbitMQConfig.Queues.RECOMMENDATIONS, true, false, false, null)
+  
+  // Configuration de l'algorithme de recommandation
+  private object AlgorithmConfig {
+    val RECENCY_WEIGHT = 0.3 // Poids de la récence (30%)
+    val FREQUENCY_WEIGHT = 0.7 // Poids de la fréquence (70%)
+    val MAX_RECOMMENDATIONS = 5 // Nombre max de recommandations
+    val RECENCY_DECAY_DAYS = 30.0 // Facteur de décroissance temporelle (30 jours)
+  }
   
   def generateRecommendationsForUser(userId: Long): Future[Recommendation] = {
     // 1. Récupération des événements récents de l'utilisateur
@@ -54,23 +63,40 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
   }
   
   private def calculateRecommendations(userId: Long, events: List[ProcessedEvent]): Recommendation = {
-    // Implémentation simple d'un moteur de recommandation basé sur la fréquence
+    val currentTime = System.currentTimeMillis()
     
-    // Extraire les IDs d'items et calculer les scores basés sur la fréquence et le récence
-    val itemScores = events
+    // Extraire les items uniques des événements
+    val itemCounts = events
       .filter(_.itemId.isDefined)
       .groupBy(_.itemId.get)
-      .map { case (itemId, itemEvents) =>
-        // Calculer un score basé sur la fréquence et la récence
-        val frequency = itemEvents.size
-        val recency = itemEvents.map(e => Math.max(0, (System.currentTimeMillis() - e.timestamp) / 3600000.0)).min
-        val score = 0.7 * frequency + 0.3 * (1.0 / (1.0 + recency))
-        
-        (itemId, score)
+      .view
+      .mapValues(_.size)
+      .toMap
+    
+    // Calcul du score de récence
+    val recencyScores = events
+      .filter(_.itemId.isDefined)
+      .groupBy(_.itemId.get)
+      .view
+      .mapValues { events =>
+        val mostRecent = events.maxBy(_.timestamp).timestamp
+        val daysAgo = (currentTime - mostRecent) / (1000.0 * 60 * 60 * 24)
+        Math.exp(-daysAgo / AlgorithmConfig.RECENCY_DECAY_DAYS) // Score qui diminue avec le temps
       }
-      .toList
+      .toMap
+    
+    // Normalisation des scores de fréquence
+    val maxCount = if (itemCounts.isEmpty) 1.0 else itemCounts.values.max.toDouble
+    val normalizedFrequency = itemCounts.view.mapValues(_ / maxCount).toMap
+    
+    // Calcul du score combiné (fréquence + récence)
+    val itemScores = itemCounts.keys.map { itemId =>
+      val frequencyScore = normalizedFrequency.getOrElse(itemId, 0.0) * AlgorithmConfig.FREQUENCY_WEIGHT
+      val recencyScore = recencyScores.getOrElse(itemId, 0.0) * AlgorithmConfig.RECENCY_WEIGHT
+      (itemId, frequencyScore + recencyScore)
+    }.toList
       .sortBy(-_._2)
-      .take(5)  // Top 5 items
+      .take(AlgorithmConfig.MAX_RECOMMENDATIONS)
     
     // Créer les objets RecommendedItem
     val recommendedItems = itemScores.map { case (itemId, score) =>
@@ -100,12 +126,13 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
       null,
       recommendationJson.getBytes(StandardCharsets.UTF_8)
     )
-    println(s"Recommandation publiée pour l'utilisateur ${recommendation.userId}")
+    logger.info(s"Recommandation publiée pour l'utilisateur ${recommendation.userId}")
   }
   
   def close(): Unit = {
     if (publishChannel != null && publishChannel.isOpen) {
       publishChannel.close()
+      logger.info("Recommender channel closed")
     }
   }
 }
