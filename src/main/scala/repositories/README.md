@@ -2,35 +2,28 @@
 
 ## Approches utilisées
 
-Notre système utilise deux approches différentes pour l'accès aux données:
+Notre système utilise JDBC direct pour toutes les opérations d'accès aux données, pour des raisons de performance et de contrôle.
 
-### 1. JDBC direct (Repository.scala)
+### Architecture à deux niveaux
 
-Le `Repository.scala` utilise JDBC direct avec la méthode `withConnection` pour gérer:
-- Les événements traités (processed_events)
-- Les recommandations (recommendations)
+1. **JDBC direct avec exécution optimisée**
+   - Tous les repositories utilisent JDBC avec des prepared statements
+   - Chaque repository gère ses propres connexions via le pool centralisé
 
-Cette approche a été choisie pour ces tables car:
-- Elles sont optimisées pour les opérations à haute fréquence
-- Elles ont besoin d'un contrôle précis des transactions
-- Elles utilisent des structures JSON qui nécessitent un traitement personnalisé
+2. **Séparation par domaine**
+   - `Repository` : Gère les tables d'événements transformés et recommandations à haute fréquence
+   - Repositories spécifiques : `UserRepository`, `EventRepository`, etc. pour les données de référence
 
-### 2. Slick ORM (UserRepository, EventRepository, etc.)
+### Justification technique
 
-Les autres repositories utilisent Slick (ORM) pour:
-- Les tables de référence (users, events, participations, etc.)
-- Les opérations moins fréquentes et plus standard
+Cette architecture a été choisie pour:
+- Maximiser les performances sur l'ensemble du système
+- Garder un contrôle précis des requêtes SQL
+- Permettre l'optimisation spécifique par type de données
+- Rester cohérent dans tout le codebase avec une seule approche
 
-Cette approche a été choisie pour ces tables car:
-- Elles bénéficient de l'abstraction fournie par l'ORM
-- Elles ont des structures simples et relationnelles
-- Elles sont moins sollicitées en termes de fréquence d'accès
+## Gestion des connexions
 
-## Justification technique
-
-Les deux approches coexistent pour offrir le meilleur des deux mondes:
-- Performance et contrôle fin pour les opérations à haute fréquence
-- Facilité de développement et abstraction pour les opérations standard
-
-Cette architecture hybride est délibérée et nous permet d'optimiser chaque partie du système
-selon ses besoins spécifiques.
+- Toutes les connexions sont obtenues via `DatabaseConfig.getConnection()`
+- Les connexions sont automatiquement retournées au pool après utilisation
+- Pattern `withConnection`, `withPreparedStatement` et `withResultSet` pour la gestion des ressources

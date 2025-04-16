@@ -4,7 +4,6 @@ import models._
 import repositories._
 import scala.concurrent.{ExecutionContext, Future, Await}
 import scala.concurrent.duration._
-import config.DatabaseConfig.db
 import config.RabbitMQConfig
 import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback}
 import io.circe.parser._
@@ -17,8 +16,7 @@ class DataLoader(
   userRepo: UserRepository,
   eventRepo: EventRepository,
   participationRepo: ParticipationRepository,
-  friendsRepo: FriendsRepository,
-  cacheManager: CacheManager
+  friendsRepo: FriendsRepository
 )(implicit ec: ExecutionContext) {
   
   private val logger = LoggerFactory.getLogger(getClass)
@@ -30,35 +28,31 @@ class DataLoader(
   
   // Chargement asynchrone de toutes les données
   def loadAllAsync(): Future[Unit] = {
-    // Utilisation de Future.sequence pour exécuter les futures en parallèle
+    // Modified to remove cache references
     val futures = Seq(
       userRepo.findAll().map { users =>
-        users.foreach(cacheManager.cacheUser)
-        logger.info(s"Loaded ${users.size} users into cache")
+        logger.info(s"Loaded ${users.size} users from database")
       }.recover { case ex =>
         logger.error("Failed to load users", ex)
         throw ex
       },
       
       eventRepo.findFutureEvents().map { events =>
-        events.foreach(cacheManager.cacheEvent)
-        logger.info(s"Loaded ${events.size} events into cache")
+        logger.info(s"Loaded ${events.size} events from database")
       }.recover { case ex =>
         logger.error("Failed to load events", ex)
         throw ex
       },
       
       participationRepo.findAll().map { participations =>
-        participations.foreach(cacheManager.cacheParticipation)
-        logger.info(s"Loaded ${participations.size} participations into cache")
+        logger.info(s"Loaded ${participations.size} participations from database")
       }.recover { case ex =>
         logger.error("Failed to load participations", ex)
         throw ex
       },
       
       friendsRepo.findAll().map { friendships =>
-        friendships.foreach(cacheManager.cacheFriendship)
-        logger.info(s"Loaded ${friendships.size} friendships into cache")
+        logger.info(s"Loaded ${friendships.size} friendships from database")
       }.recover { case ex =>
         logger.error("Failed to load friendships", ex)
         throw ex
@@ -82,9 +76,7 @@ class DataLoader(
   
   // Méthode utilitaire pour extraire les mots-clés d'un événement
   def getEventKeywords(eventId: Long): Map[Int, Int] = {
-    events.find(_.eventId == eventId)
-      .map(_.keywordFrequencies)
-      .getOrElse(Map.empty)
+    eventRepo.findById(eventId).map(_.keywordFrequencies).getOrElse(Map.empty)
   }
   
   // Start the data stream consumers
@@ -93,7 +85,7 @@ class DataLoader(
     startEventConsumer()
     startParticipationConsumer()
     startFriendshipConsumer()
-    println("All data stream consumers started successfully")
+    logger.info("All data stream consumers started successfully")
   }
   
   private def startUserConsumer(): Unit = {
@@ -105,9 +97,8 @@ class DataLoader(
         val message = new String(delivery.getBody, StandardCharsets.UTF_8)
         decode[User](message) match {
           case Right(user) =>
-            // Update cache and database
+            // Update database only (removed cache update)
             userRepo.upsert(user)
-            cacheManager.cacheUser(user)
             logger.info(s"Received user update for ${user.userId}")
           case Left(error) =>
             logger.error(s"Error decoding user message: ${error.getMessage}", error)
@@ -134,9 +125,8 @@ class DataLoader(
         val message = new String(delivery.getBody, StandardCharsets.UTF_8)
         decode[Event](message) match {
           case Right(event) =>
-            // Update cache and database
+            // Update database only (removed cache update)
             eventRepo.upsert(event)
-            cacheManager.cacheEvent(event)
             logger.info(s"Received event update for ${event.eventId}")
           case Left(error) =>
             logger.error(s"Error decoding event message: ${error.getMessage}", error)
@@ -164,8 +154,7 @@ class DataLoader(
         decode[EventParticipation](message) match {
           case Right(participation) =>
             participationRepo.upsert(participation)
-            // Invalidate related caches
-            cacheManager.invalidateEvent(participation.eventId)
+            // Removed cache invalidation
             logger.info(s"Received participation update for event ${participation.eventId}")
           case Left(error) =>
             logger.error(s"Error decoding participation message: ${error.getMessage}", error)
@@ -189,8 +178,7 @@ class DataLoader(
         decode[UserFriends](message) match {
           case Right(friendship) =>
             friendsRepo.upsert(friendship)
-            // Invalidate user recommendations cache
-            cacheManager.invalidateUserRecommendations(friendship.userId)
+            // Removed cache invalidation
             logger.info(s"Received friendship update for user ${friendship.userId}")
           case Left(error) =>
             logger.error(s"Error decoding friendship message: ${error.getMessage}", error)

@@ -1,187 +1,214 @@
-# Guide d'Exécution - Système de Recommandation en Temps Réel
+# Guide Détaillé - Système de Recommandation en Temps Réel
 
-## 1. Vérifications Préliminaires
+## 1. Prérequis
+- Docker et Docker Compose installés
+- Ports disponibles : 5432, 5672, 15672, 8080
+- Git (pour le clone du projet)
 
-### Vérification de l'environnement
+## 2. Configuration Initiale
+
+### 2.1 Vérification de l'Environnement
 ```bash
-# Versions des outils
+# Vérifier les versions
 docker --version
 docker-compose --version
-curl --version
 
-# Vérification des ports requis
-sudo lsof -i :5432  # PostgreSQL
-sudo lsof -i :5672  # RabbitMQ
-sudo lsof -i :15672 # RabbitMQ Management
-sudo lsof -i :8080  # Application
+# Vérifier les ports
+netstat -tulpn | grep -E '5432|5672|15672|8080'
 ```
 
-### Préparation du système
-```bash
-# Nettoyage docker si nécessaire
-docker system prune -f
-docker volume prune -f
-
-# Construction des images
-docker-compose build --no-cache
+### 2.2 Structure du Projet
 ```
-
-## 2. Configuration des Terminaux VS Code
-Configurer 3 terminaux :
-- Terminal 1 : Services Infrastructure (DB + RabbitMQ)
-- Terminal 2 : Application
-- Terminal 3 : Monitoring
+realtime-recommendation-engine/
+├── src/
+├── Dockerfile
+├── docker-compose.yml
+├── build.sbt
+└── project/
+```
 
 ## 3. Démarrage du Système
 
-### Terminal 1 - Infrastructure
+### 3.1 Préparation
 ```bash
-# Démarrage PostgreSQL
-docker-compose up -d db
-docker-compose logs -f db  # Attendre "database system is ready"
+# Nettoyage de l'environnement
+docker-compose down -v        # Arrête et supprime les conteneurs et volumes
+docker system prune -f       # Nettoie les ressources inutilisées
+```
 
-# Démarrage RabbitMQ
-docker-compose up -d rabbitmq
-docker-compose logs -f rabbitmq  # Attendre "Server startup complete"
+### 3.2 Construction et Démarrage
+```bash
+# Construction des images
+docker-compose build --no-cache
 
-# Vérification des services
+# Démarrage des services
+docker-compose up -d             # Démarrage en arrière-plan
+docker-compose up               # Démarrage avec logs visibles
+```
+
+## 4. Validation du Système
+
+### 4.1 Vérification des Services
+```bash
+# État des conteneurs
 docker-compose ps
+
+# Logs des services
+docker-compose logs -f db        # Logs de PostgreSQL
+docker-compose logs -f rabbitmq  # Logs de RabbitMQ
+docker-compose logs -f recommendation-engine  # Logs de l'application
 ```
 
-### Terminal 2 - Application
+### 4.2 Tests des Points d'Accès
+| Service | URL | Identifiants |
+|---------|-----|--------------|
+| RabbitMQ Management | http://localhost:15672 | guest/guest |
+| API Application | http://localhost:8080 | - |
+
+## 5. Utilisation de l'API
+
+### 5.1 Vérification de Santé
 ```bash
-# Démarrer l'application
-docker-compose up recommendation-engine
-```
-
-### Terminal 3 - Commandes de Monitoring
-```bash
-# Logs en temps réel
-docker-compose logs -f --tail=100
-
-# Stats des conteneurs
-docker stats
-
-# Événements Docker
-docker events
-```
-
-## 4. URLs Importantes
-- RabbitMQ Management: http://localhost:15672 (guest/guest)
-- API Application: http://localhost:8080
-
-## 5. Tests et Validation
-
-### Tests de base
-```bash
-# Test de santé
 curl http://localhost:8080/health
-
-# Test des recommendations (à adapter selon votre API)
-curl -X GET "http://localhost:8080/api/recommendations?userId=1"
-curl -X POST "http://localhost:8080/api/events" -H "Content-Type: application/json" \
-  -d '{"userId":1,"eventType":"view","itemId":123}'
 ```
 
-### Monitoring avancé
+### 5.2 Opérations sur les Événements
 ```bash
-# Métriques détaillées RabbitMQ
-curl -u guest:guest http://localhost:15672/api/overview | jq .
+# Envoi d'un événement de vue
+curl -X POST "http://localhost:8080/api/events" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 1,
+    "eventType": "view",
+    "itemId": 123,
+    "timestamp": "2024-01-20T10:00:00Z"
+  }'
 
-# Statistiques PostgreSQL
-docker-compose exec db psql -U postgres -d recommendation_engine \
-  -c "SELECT * FROM pg_stat_database WHERE datname = 'recommendation_engine';"
+# Envoi d'un événement d'achat
+curl -X POST "http://localhost:8080/api/events" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 1,
+    "eventType": "purchase",
+    "itemId": 123,
+    "timestamp": "2024-01-20T10:05:00Z"
+  }'
 ```
 
-## 6. Commandes Utiles
-
-### Maintenance
+### 5.3 Obtention des Recommandations
 ```bash
-# Sauvegarde de la base de données
-docker-compose exec db pg_dump -U postgres recommendation_engine > backup.sql
+# Recommandations pour un utilisateur
+curl "http://localhost:8080/api/recommendations?userId=1&limit=5"
 
-# Nettoyage des logs
-docker-compose exec db vacuumdb -U postgres -d recommendation_engine --analyze
-
-# Purge des queues RabbitMQ
-docker-compose exec rabbitmq rabbitmqctl purge_queue user_events
-docker-compose exec rabbitmq rabbitmqctl purge_queue recommendations
+# Recommandations avec filtres
+curl "http://localhost:8080/api/recommendations?userId=1&category=electronics&limit=10"
 ```
 
-### Diagnostic
-```bash
-# Logs d'un service
-docker-compose logs [service]
+## 6. Maintenance
 
-# Stats des conteneurs
+### 6.1 Gestion des Services
+```bash
+# Redémarrage d'un service spécifique
+docker-compose restart rabbitmq
+docker-compose restart db
+docker-compose restart recommendation-engine
+
+# Mise à jour des services
+docker-compose pull   # Télécharge les nouvelles images
+docker-compose up -d  # Redémarre avec les nouvelles images
+```
+
+### 6.2 Surveillance
+```bash
+# Métriques des conteneurs
 docker stats
 
-# Connexion shell
-docker-compose exec [service] /bin/bash
+# Espace disque
+docker system df
+
+# Logs récents
+docker-compose logs --tail=100 -f
 ```
 
-### Vérification des services
+### 6.3 Base de Données
 ```bash
-# PostgreSQL
-docker-compose exec db psql -U postgres -d recommendation_engine -c "\l"
-docker-compose exec db psql -U postgres -d recommendation_engine -c "\dt"
+# Connexion à PostgreSQL
+docker-compose exec db psql -U postgres -d recommendation_engine
 
-# RabbitMQ
-docker-compose exec rabbitmq rabbitmqctl list_users
-docker-compose exec rabbitmq rabbitmqctl list_vhosts
+# Commandes utiles PostgreSQL
+\dt                    # Liste des tables
+\d+ nom_table         # Structure d'une table
+SELECT count(*) FROM events;  # Nombre d'événements
+```
+
+### 6.4 RabbitMQ
+```bash
+# État des queues
 docker-compose exec rabbitmq rabbitmqctl list_queues
+
+# Purge d'une queue
+docker-compose exec rabbitmq rabbitmqctl purge_queue events_queue
+
+# Liste des connexions
+docker-compose exec rabbitmq rabbitmqctl list_connections
 ```
 
 ## 7. Dépannage
 
-### Base de données
+### 7.1 Problèmes Courants
+1. **Services qui ne démarrent pas**
 ```bash
-# Connexions actives
-docker-compose exec db psql -U postgres -c "SELECT * FROM pg_stat_activity;"
+# Vérifier les logs
+docker-compose logs [service]
 
-# Taille des tables
-docker-compose exec db psql -U postgres -d recommendation_engine -c "\
-SELECT table_name, pg_size_pretty(pg_total_relation_size(quote_ident(table_name))) \
-FROM information_schema.tables \
-WHERE table_schema = 'public';"
+# Vérifier l'état
+docker-compose ps
 ```
 
-### RabbitMQ
+2. **Problèmes de connexion**
 ```bash
-# Métriques RabbitMQ
-docker-compose exec rabbitmq rabbitmqctl list_queues name messages_ready messages_unacknowledged
+# Vérifier le réseau Docker
+docker network ls
+docker network inspect realtime-recommendation-engine_default
+```
 
-# Connexions actives
-docker-compose exec rabbitmq rabbitmqctl list_connections
+3. **Problèmes de performance**
+```bash
+# Surveillance des ressources
+docker stats
+top
+```
 
-# Consommateurs
-docker-compose exec rabbitmq rabbitmqctl list_consumers
+### 7.2 Réinitialisation
+```bash
+# Réinitialisation complète
+docker-compose down -v
+docker system prune -f
+docker-compose up -d
 ```
 
 ## 8. Arrêt du Système
 
-### Arrêt gracieux
+### 8.1 Arrêt Normal
 ```bash
-# Arrêt des services
+# Arrêt gracieux
 docker-compose down
 
-# Nettoyage complet
-docker-compose down -v --rmi all
-docker system prune -f
+# Arrêt avec suppression des volumes
+docker-compose down -v
 ```
 
-### Sauvegarde finale
+### 8.2 Sauvegarde
 ```bash
-# Sauvegarde des données
-docker-compose exec db pg_dump -U postgres recommendation_engine > backup_final.sql
+# Sauvegarde de la base de données
+docker-compose exec db pg_dump -U postgres recommendation_engine > backup.sql
 
-# Export des configurations RabbitMQ
-docker-compose exec rabbitmq rabbitmqctl export_definitions /tmp/rabbitmq-def.json
-docker cp $(docker-compose ps -q rabbitmq):/tmp/rabbitmq-def.json ./rabbitmq-def.json
+# Export de la configuration RabbitMQ
+docker-compose exec rabbitmq rabbitmqctl export_definitions > rabbitmq_backup.json
 ```
 
 ## Notes Importantes
 - Toujours vérifier les logs avant toute opération de maintenance
-- Faire des sauvegardes régulières
-- Surveiller l'utilisation des ressources
-- En cas de problème, vérifier dans l'ordre : réseau, base de données, RabbitMQ, application
+- Faire des sauvegardes régulières de la base de données
+- Surveiller l'utilisation des ressources système
+- En cas de problème, consulter les logs dans l'ordre : DB → RabbitMQ → Application

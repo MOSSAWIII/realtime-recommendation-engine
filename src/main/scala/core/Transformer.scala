@@ -2,12 +2,25 @@ package core
 
 import models._
 import repositories.Repository
+import config.RabbitMQManager
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Success, Failure}
 import org.slf4j.LoggerFactory
+import io.circe.syntax._
+import io.circe.generic.auto._
+import java.nio.charset.StandardCharsets
 
-class Transformer(repository: Repository, recommender: Recommender)(implicit ec: ExecutionContext) {
+class Transformer(repository: Repository)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
+  
+  // Use the centralized RabbitMQ manager instead of creating a channel directly
+  private val channel = RabbitMQManager.createChannel("transformer")
+  
+  // Ensure queue exists
+  channel.queueDeclare(
+    RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS, 
+    true, false, false, null
+  )
   
   def processEvent(event: UserEvent): Future[ProcessedEvent] = {
     logger.debug(s"Traitement de l'événement: $event")
@@ -17,22 +30,25 @@ class Transformer(repository: Repository, recommender: Recommender)(implicit ec:
     
     // 2. Stockage dans la base de données
     repository.storeProcessedEvent(processedEvent)
-      .flatMap { storedEvent =>
-        // 3. Déclenchement du processus de recommandation
-        val recommendationFuture = recommender.generateRecommendationsForUser(event.userId)
-          .recover { case e: Exception =>
-            logger.error(s"Échec de génération des recommandations: ${e.getMessage}", e)
-            throw e
-          }
+      .map { storedEvent =>
+        // 3. Publier une demande de recommandation asynchrone via RabbitMQ
+        // au lieu d'appeler directement le Recommender
+        val recommendationRequest = RecommendationRequest(
+          userId = event.userId,
+          timestamp = System.currentTimeMillis()
+        )
         
-        recommendationFuture.onComplete {
-          case Success(recommendation) => 
-            logger.info(s"Nouvelles recommandations générées pour l'utilisateur ${event.userId}")
-          case Failure(exception) =>
-            logger.error(s"Erreur lors de la génération des recommandations: ${exception.getMessage}", exception)
-        }
+        val requestJson = recommendationRequest.asJson.noSpaces
         
-        Future.successful(storedEvent)
+        channel.basicPublish(
+          "",  // échange par défaut
+          RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS,
+          null,
+          requestJson.getBytes(StandardCharsets.UTF_8)
+        )
+        
+        logger.info(s"Demande de recommandation publiée pour l'utilisateur ${event.userId}")
+        storedEvent
       }
       .recoverWith { case e: Exception =>
         logger.error(s"Erreur lors du traitement de l'événement: ${e.getMessage}", e)
@@ -59,5 +75,9 @@ class Transformer(repository: Repository, recommender: Recommender)(implicit ec:
       timestamp = event.timestamp,
       processingTimestamp = System.currentTimeMillis()
     )
+  }
+  
+  def close(): Unit = {
+    RabbitMQManager.closeChannel("transformer")
   }
 }

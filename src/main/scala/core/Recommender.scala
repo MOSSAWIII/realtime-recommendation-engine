@@ -2,19 +2,31 @@ package core
 
 import models._
 import repositories.Repository
-import config.RabbitMQConfig
+import config.RabbitMQManager
 import scala.concurrent.{ExecutionContext, Future}
 import io.circe.syntax._
+import io.circe.parser._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
 import org.slf4j.LoggerFactory
+import com.rabbitmq.client.{DeliverCallback, CancelCallback}
 
 class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
-  private val publishChannel = RabbitMQConfig.createChannel()
   
-  // Déclaration de la queue de sortie pour les recommandations
-  publishChannel.queueDeclare(RabbitMQConfig.Queues.RECOMMENDATIONS, true, false, false, null)
+  // Use the centralized RabbitMQ manager
+  private val consumeChannel = RabbitMQManager.createChannel("recommender-consume")
+  private val publishChannel = RabbitMQManager.createChannel("recommender-publish")
+  
+  // Déclaration des queues
+  consumeChannel.queueDeclare(
+    RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS, 
+    true, false, false, null
+  )
+  publishChannel.queueDeclare(
+    RabbitMQManager.Queues.RECOMMENDATIONS, 
+    true, false, false, null
+  )
   
   // Configuration de l'algorithme de recommandation
   private object AlgorithmConfig {
@@ -24,31 +36,85 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
     val RECENCY_DECAY_DAYS = 30.0 // Facteur de décroissance temporelle (30 jours)
   }
   
-  def generateRecommendationsForUser(userId: Long): Future[Recommendation] = {
-    // 1. Récupération des événements récents de l'utilisateur
-    repository.getProcessedEventsForUser(userId, 100).flatMap { events =>
-      // 2. Application d'un algorithme de recommandation simple
-      val recommendation = calculateRecommendations(userId, events)
-      
-      // 3. Stockage des recommandations
-      repository.storeRecommendation(recommendation).map { storedRecommendation =>
-        // 4. Publication des recommandations dans RabbitMQ
-        publishRecommendation(storedRecommendation)
-        storedRecommendation
+  // Start consuming recommendation requests
+  def start(): Unit = {
+    logger.info("Starting recommendation request consumer...")
+    
+    val deliverCallback = new DeliverCallback {
+      override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
+        val message = new String(delivery.getBody, StandardCharsets.UTF_8)
+        
+        // Process recommendation request
+        decode[RecommendationRequest](message) match {
+          case Right(request) =>
+            logger.debug(s"Processing recommendation request for user ${request.userId}")
+            
+            // Generate recommendations asynchronously
+            generateRecommendationsForUser(request.userId).onComplete {
+              case scala.util.Success(recommendation) =>
+                logger.info(s"Successfully generated recommendations for user ${request.userId}")
+              case scala.util.Failure(exception) =>
+                logger.error(s"Failed to generate recommendations for user ${request.userId}: ${exception.getMessage}", exception)
+            }
+            
+          case Left(error) =>
+            logger.error(s"Error decoding recommendation request: ${error.getMessage}", error)
+        }
+        
+        // Acknowledge the message
+        consumeChannel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
     }
+    
+    val cancelCallback = new CancelCallback {
+      override def handle(consumerTag: String): Unit = 
+        logger.warn(s"Recommendation request consumer cancelled: $consumerTag")
+    }
+    
+    // Set prefetch to limit the number of unacknowledged messages (for backpressure)
+    consumeChannel.basicQos(10)
+    
+    // Start consuming
+    consumeChannel.basicConsume(
+      RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS,
+      false,
+      deliverCallback,
+      cancelCallback
+    )
+    
+    logger.info("Recommendation request consumer started")
+  }
+  
+  def generateRecommendationsForUser(userId: Long): Future[Recommendation] = {
+    // Add throttling - check if we've recently generated recommendations for this user
+    repository.getRecentRecommendationForUser(userId, 5 * 60 * 1000) // 5 minutes
+      .flatMap { 
+        case Some(recentRecommendation) =>
+          // Recent recommendation exists, return it instead of regenerating
+          logger.debug(s"Using recent recommendation for user $userId")
+          Future.successful(recentRecommendation)
+          
+        case None =>
+          // No recent recommendation, generate a new one
+          // 1. Récupération des événements récents de l'utilisateur
+          repository.getProcessedEventsForUser(userId, 100).flatMap { events =>
+            // 2. Application d'un algorithme de recommandation simple
+            val recommendation = calculateRecommendations(userId, events)
+            
+            // 3. Stockage des recommandations
+            repository.storeRecommendation(recommendation).map { storedRecommendation =>
+              // 4. Publication des recommandations dans RabbitMQ
+              publishRecommendation(storedRecommendation)
+              storedRecommendation
+            }
+          }
+      }
   }
   
   def generateRecommendationsForAllUsers(): Future[List[Recommendation]] = {
-    // Cette méthode pourrait être utilisée par une tâche planifiée
-    // pour mettre à jour les recommandations de tous les utilisateurs
-    
-    // 1. Récupération des événements récents
     repository.getRecentProcessedEvents(1000).flatMap { events =>
-      // 2. Regroupement par utilisateur
       val userEvents = events.groupBy(_.userId)
       
-      // 3. Génération des recommandations pour chaque utilisateur
       val recommendationFutures = userEvents.map { case (userId, userEvents) =>
         val recommendation = calculateRecommendations(userId, userEvents)
         repository.storeRecommendation(recommendation).map { storedRecommendation =>
@@ -57,7 +123,6 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
         }
       }
       
-      // 4. Combinaison des résultats
       Future.sequence(recommendationFutures.toList)
     }
   }
@@ -118,11 +183,10 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
   }
   
   private def publishRecommendation(recommendation: Recommendation): Unit = {
-    // Convertir en JSON et publier dans la queue RabbitMQ
     val recommendationJson = recommendation.asJson.noSpaces
     publishChannel.basicPublish(
       "",  // échange par défaut
-      RabbitMQConfig.Queues.RECOMMENDATIONS,
+      RabbitMQManager.Queues.RECOMMENDATIONS,
       null,
       recommendationJson.getBytes(StandardCharsets.UTF_8)
     )
@@ -130,9 +194,7 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
   }
   
   def close(): Unit = {
-    if (publishChannel != null && publishChannel.isOpen) {
-      publishChannel.close()
-      logger.info("Recommender channel closed")
-    }
+    RabbitMQManager.closeChannel("recommender-consume")
+    RabbitMQManager.closeChannel("recommender-publish")
   }
 }

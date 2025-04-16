@@ -9,6 +9,8 @@ libraryDependencies ++= Seq(
   "io.circe" %% "circe-core" % "0.14.5",
   "io.circe" %% "circe-generic" % "0.14.5",
   "io.circe" %% "circe-parser" % "0.14.5",
+  "com.zaxxer" % "HikariCP" % "5.0.1", // Ajout de la dépendance HikariCP
+  "ch.qos.logback" % "logback-classic" % "1.4.11", // Pour SLF4J qui est utilisé
   "org.scalatest" %% "scalatest" % "3.2.15" % Test
 )
 

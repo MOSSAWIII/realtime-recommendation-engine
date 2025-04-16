@@ -7,7 +7,6 @@ import scala.concurrent.{ExecutionContext, Future}
 import org.slf4j.LoggerFactory
 import io.circe.parser._
 import io.circe.generic.auto._
-// Missing import for asJson extension method
 import io.circe.syntax._
 
 /**
@@ -22,7 +21,9 @@ import io.circe.syntax._
  * - Permettant un contrôle fin des requêtes SQL et de la sérialisation
  */
 class Repository(implicit ec: ExecutionContext) extends BaseRepository {
-  private val logger = LoggerFactory.getLogger(getClass)
+  // Soit supprimer cette ligne (car le logger est déjà hérité)
+  // Soit changer private en protected:
+  // protected override val logger = LoggerFactory.getLogger(getClass)
   
   /**
    * Méthode utilitaire qui gère automatiquement:
@@ -158,6 +159,8 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
     }
   }, s"Erreur lors du stockage d'un événement traité: $event")
   
+  // Explicitly identify this as the ProcessedEvent repository implementation
+  // to distinguish it from the domain-specific repositories
   def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = Future {
     withConnection { connection =>
       val events = scala.collection.mutable.ListBuffer[ProcessedEvent]()
@@ -232,6 +235,7 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
   
   // ----- Méthodes pour les recommandations -----
   
+  // Same for recommendations
   def storeRecommendation(recommendation: Recommendation): Future[Recommendation] = Future {
     withConnection { connection =>
       val sql = """
@@ -326,4 +330,43 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
         }
       }
     }, s"Erreur lors de la récupération des recommandations pour l'utilisateur $userId")
+  
+  def getRecentRecommendationForUser(userId: Long, maxAgeMs: Long): Future[Option[Recommendation]] = {
+    Future {
+      withConnection { connection =>
+        val now = System.currentTimeMillis()
+        val earliestTimestamp = now - maxAgeMs
+        
+        val sql = """
+          SELECT id, user_id, recommended_items, score, timestamp 
+          FROM recommendations 
+          WHERE user_id = ? AND timestamp > ?
+          ORDER BY timestamp DESC 
+          LIMIT 1
+        """
+        
+        withPreparedStatement(connection, sql) { ps =>
+          ps.setLong(1, userId)
+          ps.setLong(2, earliestTimestamp)
+          
+          withResultSet(ps) { rs =>
+            if (rs.next()) {
+              val itemsStr = rs.getString("recommended_items")
+              val items = decode[List[RecommendedItem]](itemsStr).getOrElse(List.empty)
+              
+              Some(Recommendation(
+                id = Some(rs.getLong("id")),
+                userId = rs.getLong("user_id"),
+                recommendedItems = items,
+                score = rs.getDouble("score"),
+                timestamp = rs.getLong("timestamp")
+              ))
+            } else {
+              None
+            }
+          }
+        }
+      }
+    }
+  }
 }

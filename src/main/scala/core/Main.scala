@@ -1,8 +1,8 @@
 package core
 
 import models._
-import repositories.Repository
-import config.{DatabaseConfig, RabbitMQConfig}
+import repositories._
+import config.{DatabaseConfig, RabbitMQManager}
 import scala.concurrent.{ExecutionContext, Await, Future}
 import scala.concurrent.duration._
 import scala.util.{Success, Failure, Try}
@@ -15,22 +15,53 @@ object Main {
   def main(args: Array[String]): Unit = {
     logger.info("Démarrage du moteur de recommandation en temps réel...")
     
-    // Initialisation des composants
-    val repository = new Repository()
-    val recommender = new Recommender(repository)
-    val transformer = new Transformer(repository, recommender)
-    val streamingConsumer = new StreamingConsumer(transformer)
-    
     try {
-      // 1. Initialisation des tables
+      // 1. Initialisation des repositories
+      logger.info("Initialisation des repositories...")
+      val repository = new Repository()
+      val userRepo = new UserRepository()
+      val eventRepo = new EventRepository()
+      val participationRepo = new ParticipationRepository()
+      val friendsRepo = new FriendsRepository()
+      
+      // 2. Services métier (dépendent des repositories)
+      logger.info("Initialisation des services...")
+      val recommender = new Recommender(repository)
+      val transformer = new Transformer(repository)
+      
+      // 3. Consumers (dépendent des services)
+      logger.info("Initialisation des consumers...")
+      val streamingConsumer = new StreamingConsumer(transformer)
+      val consumerManager = new ConsumerManager(
+        userRepo, eventRepo, participationRepo, friendsRepo
+      )
+      
+      // 4. Data loader (dépend des repositories)
+      logger.info("Initialisation du data loader...")
+      val dataLoader = new DataLoader(
+        userRepo, eventRepo, participationRepo, friendsRepo
+      )
+      
+      // 5. Initialisation des tables
       logger.info("Initialisation des tables...")
       Await.result(repository.initTables(), 30.seconds)
       logger.info("Tables initialisées avec succès")
       
-      // 2. Démarrage du consumer d'événements
-      streamingConsumer.start()
+      // 6. Chargement des données initiales (sans cache)
+      logger.info("Chargement des données initiales...")
+      dataLoader.loadAll()
+      logger.info("Données chargées avec succès")
       
-      // 3. Génération périodique des recommandations pour tous les utilisateurs
+      // 7. Démarrage des services
+      logger.info("Démarrage des services...")
+      recommender.start() // Démarre le consumer interne pour les demandes de recommandation
+      
+      // 8. Démarrage des consumers
+      logger.info("Démarrage des consumers...")
+      streamingConsumer.start()
+      consumerManager.startAllConsumers()
+      
+      // 9. Tâche périodique pour les recommandations en batch
       val recommendationThread = new Thread(() => {
         while (true) {
           try {
@@ -41,7 +72,6 @@ object Main {
               60.seconds
             )
             
-            // Pause entre les générations de recommandations
             Thread.sleep(5 * 60 * 1000) // 5 minutes
           } catch {
             case ex: Exception =>
@@ -54,7 +84,7 @@ object Main {
       recommendationThread.setDaemon(true)
       recommendationThread.start()
       
-      // 4. Attente de l'arrêt (Ctrl+C)
+      // 10. Attente de l'arrêt (Ctrl+C)
       logger.info("Moteur de recommandation démarré avec succès")
       logger.info("Appuyez sur Ctrl+C pour arrêter le système...")
       Thread.currentThread().join()
@@ -64,10 +94,10 @@ object Main {
         logger.error(s"Erreur critique: ${ex.getMessage}", ex)
     } finally {
       // Nettoyage des ressources
-      Try(streamingConsumer.close())
-      Try(recommender.close())
-      Try(RabbitMQConfig.closeConnection())
+      Try(RabbitMQManager.closeAllChannels())
+      Try(RabbitMQManager.closeConnection())
       Try(DatabaseConfig.closePool())
+      
       logger.info("Système arrêté")
     }
   }
