@@ -69,4 +69,17 @@ class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext)
       logger.info("StreamingConsumer channel closed")
     }
   }
+
+  def handleMessage(event: UserEvent): Option[ProcessedEvent] = {
+    // Implémentation de la méthode
+    val futureResult = transformer.processEvent(event)
+    // Dans un test, on peut utiliser Await.result pour obtenir le résultat synchrone
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    try {
+      Some(Await.result(futureResult, 5.seconds))
+    } catch {
+      case _: Exception => None
+    }
+  }
 }

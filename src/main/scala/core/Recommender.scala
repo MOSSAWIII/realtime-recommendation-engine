@@ -1,6 +1,7 @@
 package core
 
 import models._
+import repositories.RepositoryInterface
 import repositories.Repository
 import config.RabbitMQManager
 import scala.concurrent.{ExecutionContext, Future}
@@ -11,11 +12,14 @@ import java.nio.charset.StandardCharsets
 import org.slf4j.LoggerFactory
 import com.rabbitmq.client.{DeliverCallback, CancelCallback}
 
-class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
+// Modifier le constructeur pour accepter un RepositoryInterface
+class Recommender(repository: RepositoryInterface)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
   
   // Use the centralized RabbitMQ manager
-  private val consumeChannel = RabbitMQManager.createChannel("recommender-consume")
+  private val consumeChannel = 
+    if (sys.env.getOrElse("TEST_ENV", "false") == "true") null 
+    else RabbitMQManager.createChannel("recommender-consume")
   private val publishChannel = RabbitMQManager.createChannel("recommender-publish")
   
   // Déclaration des queues
@@ -116,7 +120,7 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
       val userEvents = events.groupBy(_.userId)
       
       val recommendationFutures = userEvents.map { case (userId, userEvents) =>
-        val recommendation = calculateRecommendations(userId, userEvents)
+        val recommendation = calculateRecommendations(userId, userEvents.toList)
         repository.storeRecommendation(recommendation).map { storedRecommendation =>
           publishRecommendation(storedRecommendation)
           storedRecommendation
@@ -127,6 +131,17 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
     }
   }
   
+  def calculateFrequencyScore(frequency: Int, maxFrequency: Int): Double = {
+    if (maxFrequency == 0) 0.0 else frequency.toDouble / maxFrequency.toDouble
+  }
+
+  def calculateRecencyScore(timestamp: Long): Double = {
+    val now = System.currentTimeMillis()
+    val ageInDays = (now - timestamp) / (1000.0 * 60 * 60 * 24)
+    val decay = Math.exp(-0.1 * ageInDays)  // Fonction de décroissance exponentielle
+    decay
+  }
+
   private def calculateRecommendations(userId: Long, events: List[ProcessedEvent]): Recommendation = {
     val currentTime = System.currentTimeMillis()
     
@@ -182,7 +197,7 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
     )
   }
   
-  private def publishRecommendation(recommendation: Recommendation): Unit = {
+  protected def publishRecommendation(recommendation: Recommendation): Unit = {
     val recommendationJson = recommendation.asJson.noSpaces
     publishChannel.basicPublish(
       "",  // échange par défaut
@@ -196,5 +211,12 @@ class Recommender(repository: Repository)(implicit ec: ExecutionContext) {
   def close(): Unit = {
     RabbitMQManager.closeChannel("recommender-consume")
     RabbitMQManager.closeChannel("recommender-publish")
+  }
+}
+
+// Ajouter un objet compagnon pour maintenir la compatibilité
+object Recommender {
+  def apply()(implicit ec: ExecutionContext): Recommender = {
+    new Recommender(new Repository())
   }
 }

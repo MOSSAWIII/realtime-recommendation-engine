@@ -11,7 +11,9 @@ libraryDependencies ++= Seq(
   "io.circe" %% "circe-parser" % "0.14.5",
   "com.zaxxer" % "HikariCP" % "5.0.1", 
   "ch.qos.logback" % "logback-classic" % "1.4.11", 
-  "org.scalatest" %% "scalatest" % "3.2.15" % Test
+  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
+  "org.slf4j" % "slf4j-api" % "2.0.7",
+  "org.mockito" % "mockito-inline" % "4.11.0" % Test
 )
 
 enablePlugins(JavaAppPackaging)

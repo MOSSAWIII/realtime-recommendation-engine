@@ -1,7 +1,7 @@
 package core
 
 import models._
-import repositories.Repository
+import repositories.RepositoryInterface
 import config.RabbitMQManager
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Success, Failure}
@@ -9,12 +9,11 @@ import org.slf4j.LoggerFactory
 import io.circe.syntax._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
+import com.rabbitmq.client.Channel  // Add this import
 
-class Transformer(repository: Repository)(implicit ec: ExecutionContext) {
+// Modifier la signature du constructeur
+class Transformer(repository: RepositoryInterface, channel: Channel = RabbitMQManager.createChannel("transformer"))(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
-  
-  // Use the centralized RabbitMQ manager instead of creating a channel directly
-  private val channel = RabbitMQManager.createChannel("transformer")
   
   // Ensure queue exists
   channel.queueDeclare(

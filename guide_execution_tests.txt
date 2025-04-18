@@ -1,0 +1,138 @@
+=====================================================================
+GUIDE PAS À PAS POUR EXÉCUTER LES TESTS DANS DOCKER
+=====================================================================
+
+Ce guide fournit une roadmap claire pour exécuter les tests du moteur de recommandation en temps réel dans un environnement Docker, en détaillant les tests unitaires, d'intégration et bout-en-bout (E2E).
+
+---------------------------------------------------------------------
+ÉTAPE 1: PRÉPARATION
+---------------------------------------------------------------------
+
+1. **Vérifiez les prérequis:**
+   - Docker et Docker Compose doivent être installés.
+   - Assurez-vous que les ports suivants sont disponibles:
+     - **5433** (PostgreSQL de test)
+     - **5673** (RabbitMQ de test)
+     - **15673** (RabbitMQ Management de test)
+
+2. **Créez un dossier pour les logs:**
+   ```bash
+   $ mkdir -p logs
+   ```
+
+3. **Vérifiez que les fichiers de configuration sont prêts:**
+   - Assurez-vous que `docker-compose-test.yml` est configuré pour les tests.
+   - Vérifiez que les services nécessaires (PostgreSQL, RabbitMQ) sont définis avec des ports de test.
+
+---------------------------------------------------------------------
+ÉTAPE 2: COMMANDES DE BASE
+---------------------------------------------------------------------
+
+1. **Démarrer PostgreSQL:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml up -d test-db
+   ```
+
+2. **Démarrer RabbitMQ:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml up -d test-rabbitmq
+   ```
+
+3. **Démarrer l'environnement complet:**
+   ```bash
+   $ docker-compose up --build
+   ```
+
+4. **Nettoyer l'environnement:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml down -v
+   ```
+
+5. **Lancer un shell diagnostic:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml run --rm test-runner bash
+   ```
+
+---------------------------------------------------------------------
+ÉTAPE 3: TESTS UNITAIRES
+---------------------------------------------------------------------
+
+1. **Exécuter tous les tests unitaires:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.**" > logs/all-unit-tests.log 2>&1
+   ```
+
+2. **Exécuter des tests unitaires spécifiques:**
+   - Recommender:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.core.RecommenderSpec" > logs/recommender-tests.log 2>&1
+     ```
+   - Transformer:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.core.TransformerSpec" > logs/transformer-tests.log 2>&1
+     ```
+   - StreamingConsumer:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.core.StreamingConsumerSpec" > logs/streaming-consumer-tests.log 2>&1
+     ```
+   - ConsumerManager:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.core.ConsumerManagerSpec" > logs/consumer-manager-tests.log 2>&1
+     ```
+   - Repository Principal:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.repositories.RepositorySpec" > logs/repository-tests.log 2>&1
+     ```
+   - UserRepository:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.repositories.UserRepositorySpec" > logs/user-repository-tests.log 2>&1
+     ```
+   - EventRepository:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.repositories.EventRepositorySpec" > logs/event-repository-tests.log 2>&1
+     ```
+   - FriendsRepository:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly unit.repositories.FriendsRepositorySpec" > logs/friends-repository-tests.log 2>&1
+     ```
+
+---------------------------------------------------------------------
+ÉTAPE 4: TESTS D'INTÉGRATION
+---------------------------------------------------------------------
+
+1. **Exécuter des tests d'intégration spécifiques:**
+   - Transformer-Recommender:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly integration.recommendation.TransformerRecommenderIntegrationSpec" > logs/transformer-recommender-integration-tests.log 2>&1
+     ```
+   - Streaming-Transformer:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly integration.streaming.StreamingTransformerIntegrationSpec" > logs/streaming-transformer-integration-tests.log 2>&1
+     ```
+   - Messaging:
+     ```bash
+     $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly integration.messaging.TransformerRecommenderMessagingSpec" > logs/messaging-tests.log 2>&1
+     ```
+
+---------------------------------------------------------------------
+ÉTAPE 5: TESTS BOUT-EN-BOUT (E2E)
+---------------------------------------------------------------------
+
+1. **Exécuter tous les tests E2E:**
+   ```bash
+   $ docker-compose -f docker-compose-test.yml run --rm test-runner sbt clean "testOnly e2e.**" > logs/e2e-tests.log 2>&1
+   ```
+
+---------------------------------------------------------------------
+ÉTAPE 6: BONNES PRATIQUES
+---------------------------------------------------------------------
+
+1. **Sauvegardez toujours les logs des tests pour analyse.**
+2. **Nettoyez régulièrement les volumes Docker pour éviter les conflits.**
+3. **Vérifiez les ports avant de lancer les tests.**
+4. **Utilisez des noms de fichiers de logs avec des timestamps pour les organiser.**
+5. **Exécutez les tests unitaires avant les tests d'intégration et E2E.**
+
+=====================================================================
+Fin du guide
+=====================================================================

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  test-db:
+    image: postgres:14
+    environment:
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_recommendation_engine
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      default:
+        aliases:
+          - db
+
+  test-rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "15673:15672"  # Different port
+      - "5673:5672"    # Add AMQP port
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - TEST_MODE=true
+      - DB_HOST=test-db
+      - DB_PORT=5432
+      - DB_NAME=test_recommendation_engine
+      - DB_USER=postgres
+      - DB_PASSWORD=test_password
+      - RABBITMQ_HOST=test-rabbitmq
+      - RABBITMQ_PORT=5672
+      - DATABASE_URL=jdbc:postgresql://test-db:5432/recommendation_engine
+    volumes:
+      - .:/app
+      - ~/.sbt:/root/.sbt
+      - ~/.ivy2:/root/.ivy2
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-rabbitmq:
+        condition: service_healthy
+    command: sbt test  # Default command runs all tests

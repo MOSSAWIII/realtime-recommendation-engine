@@ -20,11 +20,9 @@ import io.circe.syntax._
  * - Évitant l'overhead d'un ORM pour les opérations critiques
  * - Permettant un contrôle fin des requêtes SQL et de la sérialisation
  */
-class Repository(implicit ec: ExecutionContext) extends BaseRepository {
-  // Soit supprimer cette ligne (car le logger est déjà hérité)
-  // Soit changer private en protected:
-  // protected override val logger = LoggerFactory.getLogger(getClass)
-  
+class Repository(implicit val ec: ExecutionContext) extends RepositoryInterface {
+  private val logger = LoggerFactory.getLogger(getClass)
+
   /**
    * Méthode utilitaire qui gère automatiquement:
    * - L'obtention d'une connexion depuis le pool
@@ -92,67 +90,75 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
       }
     }
   }
+
+  private def executeWithErrorHandling[T](block: => T, errorMsg: String = ""): Future[T] = {
+    try {
+      Future.successful(block)
+    } catch {
+      case e: Exception =>
+        logger.error(s"${errorMsg}: ${e.getMessage}", e)
+        Future.failed(e)
+    }
+  }
   
   // Initialisation des tables
-  def initTables(): Future[Unit] = executeWithErrorHandling({
-    Future {
-      withConnection { connection =>
-        val statement = connection.createStatement()
-        
-        // Table des événements traités
-        statement.execute("""
-          CREATE TABLE IF NOT EXISTS processed_events (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            event_type VARCHAR(255) NOT NULL,
-            item_id BIGINT,
-            properties JSONB NOT NULL,
-            timestamp BIGINT NOT NULL,
-            processing_timestamp BIGINT NOT NULL
-          )
-        """)
-        
-        // Table des recommandations
-        statement.execute("""
-          CREATE TABLE IF NOT EXISTS recommendations (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            recommended_items JSONB NOT NULL,
-            score DOUBLE PRECISION NOT NULL,
-            timestamp BIGINT NOT NULL
-          )
-        """)
-      }
+  def initTables()(implicit ec: ExecutionContext): Future[Unit] = executeWithErrorHandling({
+    withConnection { connection =>
+      val statement = connection.createStatement()
+      
+      // Table des événements traités
+      statement.execute("""
+        CREATE TABLE IF NOT EXISTS processed_events (
+          id SERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL,
+          event_type VARCHAR(255) NOT NULL,
+          item_id BIGINT,
+          properties JSONB NOT NULL,
+          timestamp BIGINT NOT NULL,
+          processing_timestamp BIGINT NOT NULL
+        )
+      """)
+      
+      // Table des recommandations
+      statement.execute("""
+        CREATE TABLE IF NOT EXISTS recommendations (
+          id SERIAL PRIMARY KEY,
+          user_id BIGINT NOT NULL,
+          recommended_items JSONB NOT NULL,
+          score DOUBLE PRECISION NOT NULL,
+          timestamp BIGINT NOT NULL
+        )
+      """)
+      
+      () // Retourner Unit
     }
   }, "Erreur lors de l'initialisation des tables")
   
   // ----- Méthodes pour les événements traités -----
   
   def storeProcessedEvent(event: ProcessedEvent): Future[ProcessedEvent] = executeWithErrorHandling({
-    Future {
-      withConnection { connection =>
-        val sql = """
-          INSERT INTO processed_events 
-            (user_id, event_type, item_id, properties, timestamp, processing_timestamp)
-          VALUES (?, ?, ?, ?::jsonb, ?, ?) 
-          RETURNING id
-        """
+    withConnection { connection =>
+      val sql = """
+        INSERT INTO processed_events 
+          (user_id, event_type, item_id, properties, timestamp, processing_timestamp)
+        VALUES (?, ?, ?, ?::jsonb, ?, ?) 
+        RETURNING id
+      """
+      
+      withPreparedStatement(connection, sql) { ps =>
+        ps.setLong(1, event.userId)
+        ps.setString(2, event.eventType)
+        ps.setObject(3, event.itemId.orNull)
+        ps.setString(4, event.properties.asJson.noSpaces)
+        ps.setLong(5, event.timestamp)
+        ps.setLong(6, event.processingTimestamp)
         
-        withPreparedStatement(connection, sql) { ps =>
-          ps.setLong(1, event.userId)
-          ps.setString(2, event.eventType)
-          ps.setObject(3, event.itemId.orNull)
-          ps.setString(4, event.properties.asJson.noSpaces)
-          ps.setLong(5, event.timestamp)
-          ps.setLong(6, event.processingTimestamp)
-          
-          withResultSet(ps) { rs =>
-            if (rs.next()) {
-              val id = rs.getLong("id")
-              event.copy(id = Some(id))
-            } else {
-              event
-            }
+        withResultSet(ps) { rs =>
+          if (rs.next()) {
+            val id = rs.getLong("id")
+            event.copy(id = Some(id))
+          } else {
+            event
           }
         }
       }
@@ -198,39 +204,42 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
     }
   }
   
-  def getRecentProcessedEvents(limit: Int = 1000): Future[List[ProcessedEvent]] = Future {
-    withConnection { connection =>
-      val events = scala.collection.mutable.ListBuffer[ProcessedEvent]()
-      val sql = """
-        SELECT id, user_id, event_type, item_id, properties, timestamp, processing_timestamp 
-        FROM processed_events 
-        ORDER BY timestamp DESC 
-        LIMIT ?
-      """
-      
-      withPreparedStatement(connection, sql) { ps =>
-        ps.setInt(1, limit)
+  def getRecentProcessedEvents(limit: Int): Future[Seq[ProcessedEvent]] = {
+    executeWithErrorHandling({
+      withConnection { connection =>
+        val sql = """
+          SELECT id, user_id, event_type, item_id, properties, timestamp, processing_timestamp
+          FROM processed_events
+          ORDER BY processing_timestamp DESC
+          LIMIT ?
+        """
         
-        withResultSet(ps) { rs =>
-          while (rs.next()) {
-            val propertiesStr = rs.getString("properties")
-            val properties = decode[Map[String, String]](propertiesStr).getOrElse(Map.empty)
+        withPreparedStatement(connection, sql) { ps =>
+          ps.setInt(1, limit)
+          
+          withResultSet(ps) { rs =>
+            val events = new scala.collection.mutable.ArrayBuffer[ProcessedEvent]()
             
-            events += ProcessedEvent(
-              id = Some(rs.getLong("id")),
-              userId = rs.getLong("user_id"),
-              eventType = rs.getString("event_type"),
-              itemId = Option(rs.getObject("item_id")).map(_.asInstanceOf[Long]),
-              properties = properties,
-              timestamp = rs.getLong("timestamp"),
-              processingTimestamp = rs.getLong("processing_timestamp")
-            )
+            while (rs.next()) {
+              val propertiesStr = rs.getString("properties")
+              val properties = decode[Map[String, String]](propertiesStr).getOrElse(Map.empty)
+              
+              events += ProcessedEvent(
+                id = Some(rs.getLong("id")),
+                userId = rs.getLong("user_id"),
+                eventType = rs.getString("event_type"),
+                itemId = Option(rs.getObject("item_id")).map(_.asInstanceOf[Long]),
+                properties = properties,
+                timestamp = rs.getLong("timestamp"),
+                processingTimestamp = rs.getLong("processing_timestamp")
+              )
+            }
+            
+            events.toSeq
           }
         }
       }
-      
-      events.toList
-    }
+    }, s"Erreur lors de la récupération des événements traités récents")
   }
   
   // ----- Méthodes pour les recommandations -----
@@ -298,44 +307,42 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
   
   def getRecommendationForUser(userId: Long): Future[Option[Recommendation]] = 
     executeWithErrorHandling({
-      Future {
-        withConnection { connection =>
-          val sql = """
-            SELECT id, user_id, recommended_items, score, timestamp 
-            FROM recommendations 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT 1
-          """
-          
-          withPreparedStatement(connection, sql) { ps =>
-            ps.setLong(1, userId)
-            withResultSet(ps) { rs =>
-              if (rs.next()) {
-                val itemsStr = rs.getString("recommended_items")
-                val items = decode[List[RecommendedItem]](itemsStr).getOrElse(List.empty)
-                
-                Some(Recommendation(
-                  id = Some(rs.getLong("id")),
-                  userId = rs.getLong("user_id"),
-                  recommendedItems = items,
-                  score = rs.getDouble("score"),
-                  timestamp = rs.getLong("timestamp")
-                ))
-              } else {
-                None
-              }
+      withConnection { connection =>
+        val sql = """
+          SELECT id, user_id, recommended_items, score, timestamp 
+          FROM recommendations 
+          WHERE user_id = ? 
+          ORDER BY timestamp DESC 
+          LIMIT 1
+        """
+        
+        withPreparedStatement(connection, sql) { ps =>
+          ps.setLong(1, userId)
+          withResultSet(ps) { rs =>
+            if (rs.next()) {
+              val itemsStr = rs.getString("recommended_items")
+              val items = decode[List[RecommendedItem]](itemsStr).getOrElse(List.empty)
+              
+              Some(Recommendation(
+                id = Some(rs.getLong("id")),
+                userId = rs.getLong("user_id"),
+                recommendedItems = items,
+                score = rs.getDouble("score"),
+                timestamp = rs.getLong("timestamp")
+              ))
+            } else {
+              None
             }
           }
         }
       }
     }, s"Erreur lors de la récupération des recommandations pour l'utilisateur $userId")
   
-  def getRecentRecommendationForUser(userId: Long, maxAgeMs: Long): Future[Option[Recommendation]] = {
-    Future {
+  def getRecentRecommendationForUser(userId: Long): Future[Option[Recommendation]] = {
+    executeWithErrorHandling({
       withConnection { connection =>
         val now = System.currentTimeMillis()
-        val earliestTimestamp = now - maxAgeMs
+        val earliestTimestamp = now - 3600000 // Example time window of 1 hour
         
         val sql = """
           SELECT id, user_id, recommended_items, score, timestamp 
@@ -367,6 +374,45 @@ class Repository(implicit ec: ExecutionContext) extends BaseRepository {
           }
         }
       }
-    }
+    }, s"Erreur lors de la récupération des recommandations récentes pour l'utilisateur $userId")
+  }
+
+  def getRecentRecommendationForUser(userId: Long, timeWindow: Long): Future[Option[Recommendation]] = {
+    executeWithErrorHandling({
+      withConnection { connection =>
+        val currentTime = System.currentTimeMillis()
+        val cutoffTime = currentTime - timeWindow
+        
+        val sql = """
+          SELECT id, user_id, recommended_items, score, timestamp 
+          FROM recommendations 
+          WHERE user_id = ? AND timestamp > ? 
+          ORDER BY timestamp DESC 
+          LIMIT 1
+        """
+        
+        withPreparedStatement(connection, sql) { ps =>
+          ps.setLong(1, userId)
+          ps.setLong(2, cutoffTime)
+          
+          withResultSet(ps) { rs =>
+            if (rs.next()) {
+              val itemsStr = rs.getString("recommended_items")
+              val items = decode[List[RecommendedItem]](itemsStr).getOrElse(List.empty)
+              
+              Some(Recommendation(
+                id = Some(rs.getLong("id")),
+                userId = rs.getLong("user_id"),
+                recommendedItems = items,
+                score = rs.getDouble("score"),
+                timestamp = rs.getLong("timestamp")
+              ))
+            } else {
+              None
+            }
+          }
+        }
+      }
+    }, s"Erreur lors de la récupération des recommandations récentes pour l'utilisateur $userId")
   }
 }
