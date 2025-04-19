@@ -2,22 +2,21 @@ package unit.core
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.powermock.api.mockito.PowerMockito
 import core.Transformer
 import models._
-import org.scalatestplus.mockito.MockitoSugar
 import repositories.MockRepository
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
-import org.mockito.Mockito._
 import com.rabbitmq.client.Channel
 
-class TransformerSpec extends AnyFlatSpec with Matchers with MockitoSugar {
+class TransformerSpec extends AnyFlatSpec with Matchers {
 
   "Transformer" should "process events correctly" in {
     // Utiliser MockRepository
     val mockRepo = new MockRepository()
-    val mockChannel = mock[Channel]
+    val mockChannel = PowerMockito.mock(classOf[Channel])
     val transformer = new Transformer(mockRepo, mockChannel)
     
     val event = UserEvent(

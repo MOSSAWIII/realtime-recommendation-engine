@@ -2,9 +2,9 @@ package unit.core
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatestplus.mockito.MockitoSugar
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
+import org.powermock.api.mockito.PowerMockito
 import core.{StreamingConsumer, Transformer}
 import models.{UserEvent, ProcessedEvent}
 import repositories.MockRepository
@@ -12,13 +12,13 @@ import com.rabbitmq.client.Channel
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.ExecutionContext.Implicits.global
 
-class StreamingConsumerSpec extends AnyFlatSpec with Matchers with MockitoSugar {
+class StreamingConsumerSpec extends AnyFlatSpec with Matchers {
   
   "StreamingConsumer" should "correctly pass events to the transformer" in {
     // Create mocks
-    val mockChannel = mock[Channel]
+    val mockChannel = PowerMockito.mock(classOf[Channel])
     val mockRepository = new MockRepository()
-    val mockTransformer = mock[Transformer]
+    val mockTransformer = PowerMockito.mock(classOf[Transformer])
     
     // Configure mock behavior
     val testEvent = UserEvent(userId = 1, eventType = "view", itemId = Some(123))

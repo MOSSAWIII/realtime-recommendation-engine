@@ -9,7 +9,11 @@ libraryDependencies ++= Seq(
   "org.testcontainers" % "rabbitmq" % "1.19.1" % Test,
   
   // Replace the individual scalatest modules with the complete package
-  "org.scalatest" %% "scalatest" % "3.2.15" % Test
+  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
+  
+  // Add PowerMock dependencies
+  "org.powermock" % "powermock-module-junit4" % "2.0.9" % Test,
+  "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test
 )
 
 // Enable experimental ByteBuddy support

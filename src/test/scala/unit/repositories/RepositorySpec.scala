@@ -2,9 +2,9 @@ package unit.repositories
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatestplus.mockito.MockitoSugar
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
+import org.powermock.api.mockito.PowerMockito
 import repositories.Repository
 import models.{Recommendation, RecommendedItem}
 import java.sql.{Connection, PreparedStatement, ResultSet}
@@ -13,13 +13,13 @@ import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 import scala.concurrent.ExecutionContext.Implicits.global
 
-class RepositorySpec extends AnyFlatSpec with Matchers with MockitoSugar {
+class RepositorySpec extends AnyFlatSpec with Matchers {
   
   "Repository" should "store and retrieve recommendations" in {
     // Create mocks
-    val mockConnection = mock[Connection]
-    val mockPreparedStatement = mock[PreparedStatement] 
-    val mockResultSet = mock[ResultSet]
+    val mockConnection = PowerMockito.mock(classOf[Connection])
+    val mockPreparedStatement = PowerMockito.mock(classOf[PreparedStatement]) 
+    val mockResultSet = PowerMockito.mock(classOf[ResultSet])
     
     // Configure mock behavior
     when(mockConnection.prepareStatement(anyString())).thenReturn(mockPreparedStatement)
