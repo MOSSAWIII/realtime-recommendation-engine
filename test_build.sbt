@@ -2,16 +2,14 @@
 
 // Add testing dependencies
 libraryDependencies ++= Seq(
-  "org.mockito" % "mockito-core" % "5.3.1" % Test,
+  // Use scalatestplus-mockito which brings in mockito-core
   "org.scalatestplus" %% "mockito-4-6" % "3.2.15.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-scalatest" % "0.41.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.41.0" % Test,
   "org.testcontainers" % "rabbitmq" % "1.19.1" % Test,
-  
-  // Replace the individual scalatest modules with the complete package
   "org.scalatest" %% "scalatest" % "3.2.15" % Test,
-  
-  // Add PowerMock dependencies
+
+  // --> Uncomment these lines to add PowerMock <--
   "org.powermock" % "powermock-module-junit4" % "2.0.9" % Test,
   "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test
 )
@@ -58,12 +56,6 @@ Test / parallelExecution := false  // Set to true when tests don't interfere wit
 // Ensure clean before tests
 Test / test := (Test / test).dependsOn(Test / clean).value
 
-// Add Mockito to simplify mocking JDBC interfaces
-libraryDependencies ++= Seq(
-  "org.mockito" % "mockito-core" % "5.3.1" % Test,
-  "org.scalatestplus" %% "mockito-4-6" % "3.2.15.0" % Test
-)
-
 // Import section fixes:
 // 1. Add to your test files that use ExecutionContext:
 // import scala.concurrent.ExecutionContext
@@ -74,3 +66,6 @@ libraryDependencies ++= Seq(
 
 // 3. For files that have model construction issues:
 // Check parameter lists and ensure all required fields are provided
+
+// Remove or comment out this line if it exists
+// "org.scalatest" %% "scalatest-concurrent" % "3.2.15" % Test

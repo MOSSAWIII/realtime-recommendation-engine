@@ -7,6 +7,7 @@ import io.circe.parser._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Try, Success, Failure}
 import org.slf4j.LoggerFactory
 
 /**
@@ -19,7 +20,7 @@ import org.slf4j.LoggerFactory
  * Rôle dans le pipeline:
  * [Événements user] → [RabbitMQ (StreamingConsumer)] → [Service de transformation]
  */
-class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext) {
+class StreamingConsumer(val transformer: Transformer)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
   private var channel = RabbitMQConfig.createChannel()
   
@@ -70,16 +71,19 @@ class StreamingConsumer(transformer: Transformer)(implicit ec: ExecutionContext)
     }
   }
 
-  def handleMessage(event: UserEvent): Option[ProcessedEvent] = {
-    // Implémentation de la méthode
-    val futureResult = transformer.processEvent(event)
-    // Dans un test, on peut utiliser Await.result pour obtenir le résultat synchrone
-    import scala.concurrent.Await
-    import scala.concurrent.duration._
+  // Simplified method for direct testing
+  def processEvent(event: UserEvent): Future[ProcessedEvent] = {
+    transformer.processEvent(event)
+  }
+  
+  // Original method with complex return type
+  def handleMessage(event: UserEvent): Option[Try[Future[ProcessedEvent]]] = {
     try {
-      Some(Await.result(futureResult, 5.seconds))
+      Some(Success(processEvent(event)))
     } catch {
-      case _: Exception => None
+      case e: Exception => 
+        logger.error(s"Error processing message: ${e.getMessage}", e)
+        None
     }
   }
 }

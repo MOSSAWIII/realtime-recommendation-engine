@@ -30,27 +30,27 @@ Ce guide fournit une roadmap claire pour exécuter les tests du moteur de recomm
 
 1. **Démarrer PostgreSQL:**
    ```bash
-   $ docker-compose -f docker-compose-test.yml up -d test-db
+   $ docker-compose -f docker-compose-test.yml up -d test-db > logs/test-db.log 2>&1
    ```
 
 2. **Démarrer RabbitMQ:**
    ```bash
-   $ docker-compose -f docker-compose-test.yml up -d test-rabbitmq
+   $ docker-compose -f docker-compose-test.yml up -d test-rabbitmq > logs/test-rabbitmq.log 2>&1
    ```
 
 3. **Démarrer l'environnement complet:**
    ```bash
-   $ docker-compose up --build
+   $ docker-compose up --build > logs/environment.log 2>&1
    ```
 
 4. **Nettoyer l'environnement:**
    ```bash
-   $ docker-compose -f docker-compose-test.yml down -v
+   $ docker-compose -f docker-compose-test.yml down -v > logs/cleanup.log 2>&1
    ```
 
 5. **Lancer un shell diagnostic:**
    ```bash
-   $ docker-compose -f docker-compose-test.yml run --rm test-runner bash
+   $ docker-compose -f docker-compose-test.yml run --rm test-runner bash > logs/diagnostic-shell.log 2>&1
    ```
 
 ---------------------------------------------------------------------
