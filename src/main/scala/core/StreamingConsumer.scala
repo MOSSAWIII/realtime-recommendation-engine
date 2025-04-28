@@ -2,88 +2,66 @@ package core
 
 import models._
 import com.rabbitmq.client.{DeliverCallback, CancelCallback}
-import config.RabbitMQConfig
+import config.RabbitMQManager
 import io.circe.parser._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
-import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Try, Success, Failure}
+import scala.concurrent.ExecutionContext
 import org.slf4j.LoggerFactory
 
-/**
- * Consumer responsable du traitement des événements utilisateur en temps réel.
- * 
- * Ce consumer écoute la queue USER_EVENTS qui contient les interactions utilisateur
- * brutes (clics, vues, etc.) et les transmet au Transformer pour générer
- * des recommandations en temps réel.
- * 
- * Rôle dans le pipeline:
- * [Événements user] → [RabbitMQ (StreamingConsumer)] → [Service de transformation]
- */
 class StreamingConsumer(val transformer: Transformer)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
-  private var channel = RabbitMQConfig.createChannel()
+  private val channel = RabbitMQManager.createChannel("streaming-consumer")
   
   def start(): Unit = {
-    logger.info("Démarrage du consumer d'événements utilisateur...")
+    logger.info("Starting user event consumer...")
     
-    // Déclaration de la queue pour les événements utilisateur
-    channel.queueDeclare(RabbitMQConfig.Queues.USER_EVENTS, true, false, false, null)
+    channel.queueDeclare(RabbitMQManager.Queues.USER_EVENTS, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
         val message = new String(delivery.getBody, StandardCharsets.UTF_8)
         
-        // Décodage de l'événement JSON
         decode[UserEvent](message) match {
           case Right(event) =>
-            logger.debug(s"Événement reçu: $event")
-            
-            // Transmission au transformer pour traitement
-            transformer.processEvent(event).foreach { processedEvent =>
-              logger.info(s"Événement traité pour l'utilisateur ${event.userId}")
-              logger.debug(s"Détails: $processedEvent")
-            }
-            
+            logger.debug(s"Received user event: $event")
+            processEvent(event)
           case Left(error) =>
-            logger.error(s"Erreur de décodage: ${error.getMessage}", error)
+            logger.error(s"Failed to decode user event: ${error.getMessage}")
         }
         
-        // Accusé de réception
         channel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
     }
     
     val cancelCallback = new CancelCallback {
       override def handle(consumerTag: String): Unit = 
-        logger.warn(s"Consumer annulé: $consumerTag")
+        logger.warn(s"User event consumer cancelled: $consumerTag")
     }
     
-    // Démarrage de la consommation
-    channel.basicConsume(RabbitMQConfig.Queues.USER_EVENTS, false, deliverCallback, cancelCallback)
-    logger.info("Consumer d'événements démarré avec succès")
+    channel.basicConsume(
+      RabbitMQManager.Queues.USER_EVENTS, 
+      false,  // manual ack
+      deliverCallback, 
+      cancelCallback
+    )
+    
+    logger.info("User event consumer started successfully")
+  }
+  
+  def processEvent(event: UserEvent): Unit = {
+    try {
+      transformer.processEvent(event).foreach { processedEvent =>
+        logger.info(s"Processed event for user ${event.userId}, item ${event.itemId.getOrElse("N/A")}")
+      }
+    } catch {
+      case ex: Exception =>
+        logger.error(s"Error processing event for user ${event.userId}: ${ex.getMessage}", ex)
+    }
   }
   
   def close(): Unit = {
-    if (channel != null && channel.isOpen) {
-      channel.close()
-      logger.info("StreamingConsumer channel closed")
-    }
-  }
-
-  // Simplified method for direct testing
-  def processEvent(event: UserEvent): Future[ProcessedEvent] = {
-    transformer.processEvent(event)
-  }
-  
-  // Original method with complex return type
-  def handleMessage(event: UserEvent): Option[Try[Future[ProcessedEvent]]] = {
-    try {
-      Some(Success(processEvent(event)))
-    } catch {
-      case e: Exception => 
-        logger.error(s"Error processing message: ${e.getMessage}", e)
-        None
-    }
+    RabbitMQManager.closeChannel("streaming-consumer")
+    logger.info("StreamingConsumer closed")
   }
 }

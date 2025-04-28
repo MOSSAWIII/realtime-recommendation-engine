@@ -1,133 +1,135 @@
 package unit.core
 
+import core.Recommender
+import models.{ProcessedEvent, RecommendationRequest, Recommendation, RecommendedItem}
+import repositories.Repository
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.BeforeAndAfterEach
-import org.scalatest.concurrent.ScalaFutures
-import org.scalatest.time.{Seconds, Span}
-import org.mockito.Mockito._
-import org.mockito.ArgumentMatchers._
-import org.powermock.api.mockito.PowerMockito
-import org.powermock.core.classloader.annotations.PrepareForTest
-import org.powermock.reflect.Whitebox
-
-import com.rabbitmq.client.Channel
-import config.RabbitMQManager
-import core.Recommender
-import models._
-import repositories.Repository
-import repositories.RepositoryInterface
-import scala.concurrent.ExecutionContext
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.{Future, Await}
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext.Implicits.global
 
-// A testable version of the recommender that overrides methods that would access external systems
-class TestableRecommender(repository: RepositoryInterface)(implicit ec: ExecutionContext) extends Recommender(repository)(ec) {
-  override def publishRecommendation(recommendation: Recommendation): Unit = {
-    // Do nothing in tests
-  }
+class RecommenderSpec extends AnyFlatSpec with Matchers {
   
-  override def start(): Unit = {
-    // Don't start the consumer in tests
-  }
-  
-  override def close(): Unit = {
-    // Do nothing in tests
-  }
-}
-
-class RecommenderSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach with ScalaFutures {
-  
-  // Configure ScalaFutures timeout
-  implicit override val patienceConfig = PatienceConfig(timeout = Span(5, Seconds))
-  
-  // Mock objects
-  var mockRepository: Repository = _
-  var mockChannel: Channel = _
-  var recommender: TestableRecommender = _
-  
-override def beforeEach(): Unit = {
-  // Setup fresh mocks for each test
-  mockRepository = PowerMockito.mock(classOf[Repository])
-  mockChannel = PowerMockito.mock(classOf[Channel])
-  
-  // Mock static methods
-  PowerMockito.mockStatic(RabbitMQManager.getClass)
-  when(RabbitMQManager.createChannel(anyString())).thenReturn(mockChannel)
-  
-  // Setup standard repository responses - COMPLETE THESE CONFIGURATIONS
-  when(mockRepository.storeRecommendation(any[Recommendation]())).thenReturn(
-    Future.successful(Recommendation(id = Some(1L), userId = 1L, recommendedItems = Nil, score = 0.0))
-  )
-  
-  when(mockRepository.getRecentRecommendationForUser(anyLong(), anyLong())).thenReturn(
-    Future.successful(None)
-  )
-  
-  // Create recommender with mocks
-  recommender = new TestableRecommender(mockRepository)
-}
-
-  "Recommender" should "calculate scores with 70% frequency and 30% recency weighting" in {
-    // Prepare test data - events with different timestamps
-    val now = System.currentTimeMillis()
-    val userId = 1L
-    val item1 = 101L
-    val item2 = 102L
+  "Recommender" should "generate recommendations based on user history" in {
+    // Create mock repository with predefined user history
+    val mockRepository = new MockRepository()
+    val recommender = new RecommenderUnderTest(mockRepository)
     
-    val events = List(
-      ProcessedEvent(Some(1), userId, "view", Some(item1), Map(), now),
-      ProcessedEvent(Some(2), userId, "view", Some(item1), Map(), now - 1.day.toMillis),
-      ProcessedEvent(Some(3), userId, "click", Some(item1), Map(), now - 2.days.toMillis),
-      ProcessedEvent(Some(4), userId, "view", Some(item2), Map(), now),
+    // Test request
+    val request = RecommendationRequest(
+      userId = 123L,
+      timestamp = System.currentTimeMillis()
     )
     
-    // Setup mock responses
-    when(mockRepository.getProcessedEventsForUser(anyLong(), anyInt())).thenReturn(
-      Future.successful(events))
+    // Generate recommendations
+    val recommendationFuture = recommender.generateRecommendations(request)
+    val recommendation = Await.result(recommendationFuture, 2.seconds)
     
-    // Execute the method under test with timeout
-    val recommendationFuture = recommender.generateRecommendationsForUser(userId)
-    val recommendation = Await.result(recommendationFuture, 5.seconds)
-    
-    // Verify recommendation contains our items
-    recommendation.userId shouldBe userId
-    recommendation.recommendedItems.map(_.itemId).toSet shouldBe Set(item1, item2)
-    
-    // Verify item1 has higher score than item2 since it has more events
-    val item1Rec = recommendation.recommendedItems.find(_.itemId == item1).get
-    val item2Rec = recommendation.recommendedItems.find(_.itemId == item2).get
-    item1Rec.score should be > item2Rec.score
-    
-    // Verify the repository was called correctly
-    verify(mockRepository).getProcessedEventsForUser(userId, 100)
-    verify(mockRepository).storeRecommendation(any[Recommendation])
+    // Verify recommendations
+    recommendation.userId shouldBe request.userId
+    recommendation.recommendedItems should have size 2
+    recommendation.recommendedItems.map(_.itemId) should contain allOf(101L, 102L)
   }
   
-  it should "use existing recommendations if they are recent enough" in {
-    // Setup: Create an existing recommendation
-    val userId = 2L
-    val existingRecommendation = Recommendation(
-      id = Some(1L),
-      userId = userId,
-      recommendedItems = List(RecommendedItem(201L, 0.8, "Existing recommendation")),
-      score = 0.8,
-      timestamp = System.currentTimeMillis() - 4.minutes.toMillis // 4 minutes old
+  it should "prioritize items with higher frequency" in {
+    // Create mock repository with item interaction counts
+    val mockRepository = new MockRepository(frequencyTest = true)
+    val recommender = new RecommenderUnderTest(mockRepository)
+    
+    // Test request
+    val request = RecommendationRequest(
+      userId = 123L,
+      timestamp = System.currentTimeMillis()
     )
     
-    // Mock: Return the existing recommendation
-    when(mockRepository.getRecentRecommendationForUser(userId, 5 * 60 * 1000)).thenReturn(
-      Future.successful(Some(existingRecommendation)))
+    // Generate recommendations
+    val recommendationFuture = recommender.generateRecommendations(request)
+    val recommendation = Await.result(recommendationFuture, 2.seconds)
     
-    // Execute with timeout
-    val result = Await.result(recommender.generateRecommendationsForUser(userId), 5.seconds)
+    // Verify most frequent item is first
+    recommendation.recommendedItems.size should be > 0
+    recommendation.recommendedItems.head.itemId shouldBe 102L  // Item with more interactions
+  }
+  
+  it should "store generated recommendations in the repository" in {
+    // Create mock repository
+    val mockRepository = new MockRepository()
+    val recommender = new RecommenderUnderTest(mockRepository)
     
-    // Verify: We got the existing recommendation without calculating a new one
-    result shouldBe existingRecommendation
+    // Test request
+    val request = RecommendationRequest(
+      userId = 123L,
+      timestamp = System.currentTimeMillis()
+    )
     
-    // Verify: Repository methods called correctly
-    verify(mockRepository).getRecentRecommendationForUser(userId, 5 * 60 * 1000)
-    verify(mockRepository, never()).getProcessedEventsForUser(anyLong(), anyInt())
+    // Generate recommendations
+    val recommendationFuture = recommender.generateRecommendations(request)
+    Await.result(recommendationFuture, 2.seconds)
+    
+    // Verify recommendation was stored
+    mockRepository.storedRecommendation.isDefined shouldBe true
+    mockRepository.storedRecommendation.get.userId shouldBe request.userId
+  }
+  
+  it should "handle empty user history gracefully" in {
+    // Create mock repository with empty history
+    val mockRepository = new MockRepository(emptyHistory = true)
+    val recommender = new RecommenderUnderTest(mockRepository)
+    
+    // Test request
+    val request = RecommendationRequest(
+      userId = 999L,
+      timestamp = System.currentTimeMillis()
+    )
+    
+    // Generate recommendations
+    val recommendationFuture = recommender.generateRecommendations(request)
+    val recommendation = Await.result(recommendationFuture, 2.seconds)
+    
+    // Verify empty recommendations
+    recommendation.userId shouldBe request.userId
+    recommendation.recommendedItems shouldBe empty
+  }
+  
+  // Test version of Recommender that doesn't use RabbitMQ
+  class RecommenderUnderTest(repository: Repository) extends Recommender(repository) {
+    override def start(): Unit = {}
+    override def close(): Unit = {}
+  }
+  
+  // Mock repository for testing
+  class MockRepository(emptyHistory: Boolean = false, frequencyTest: Boolean = false) extends Repository {
+    var storedRecommendation: Option[Recommendation] = None
+    
+    override def getProcessedEventsForUser(userId: Long): Future[List[ProcessedEvent]] = {
+      if (emptyHistory) {
+        Future.successful(List.empty)
+      } else if (frequencyTest) {
+        // Create history with one item having more interactions
+        val now = System.currentTimeMillis()
+        Future.successful(List(
+          ProcessedEvent(Some(1L), userId, "view", Some(101L), Map.empty, now - 10000),
+          ProcessedEvent(Some(2L), userId, "view", Some(102L), Map.empty, now - 9000),
+          ProcessedEvent(Some(3L), userId, "view", Some(102L), Map.empty, now - 8000),
+          ProcessedEvent(Some(4L), userId, "view", Some(102L), Map.empty, now - 7000)
+        ))
+      } else {
+        // Normal test case with two different items
+        val now = System.currentTimeMillis()
+        Future.successful(List(
+          ProcessedEvent(Some(1L), userId, "view", Some(101L), Map.empty, now - 10000),
+          ProcessedEvent(Some(2L), userId, "purchase", Some(101L), Map.empty, now - 5000),
+          ProcessedEvent(Some(3L), userId, "view", Some(102L), Map.empty, now - 2000)
+        ))
+      }
+    }
+    
+    override def storeRecommendation(recommendation: Recommendation): Future[Recommendation] = {
+      storedRecommendation = Some(recommendation)
+      Future.successful(recommendation)
+    }
+    
+    override def initTables(): Future[Unit] = Future.successful(())
   }
 }

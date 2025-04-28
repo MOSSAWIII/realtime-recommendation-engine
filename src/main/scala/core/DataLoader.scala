@@ -75,8 +75,10 @@ class DataLoader(
   }
   
   // Méthode utilitaire pour extraire les mots-clés d'un événement
-  def getEventKeywords(eventId: Long): Map[Int, Int] = {
-    eventRepo.findById(eventId).map(_.keywordFrequencies).getOrElse(Map.empty)
+  def getEventKeywords(eventId: Long): Future[Map[String, Int]] = {
+    eventRepo.findById(eventId).flatMap(eventOpt => 
+      Future.successful(eventOpt.map(_.keywordFrequencies).getOrElse(Map.empty))
+    )
   }
   
   // Start the data stream consumers
@@ -127,7 +129,7 @@ class DataLoader(
           case Right(event) =>
             // Update database only (removed cache update)
             eventRepo.upsert(event)
-            logger.info(s"Received event update for ${event.eventId}")
+            logger.info(s"Received event update for ${event.id.getOrElse("unknown")}")
           case Left(error) =>
             logger.error(s"Error decoding event message: ${error.getMessage}", error)
         }

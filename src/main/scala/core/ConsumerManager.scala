@@ -2,7 +2,7 @@ package core
 
 import models._
 import repositories._
-import config.RabbitMQConfig
+import config.RabbitMQManager
 import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback}
 import io.circe.parser._
 import io.circe.generic.auto._
@@ -28,7 +28,6 @@ class ConsumerManager(
 )(implicit ec: ExecutionContext) {
 
   private val logger = LoggerFactory.getLogger(getClass)
-  
   private var userChannel: Option[Channel] = None
   private var eventChannel: Option[Channel] = None
   private var participationChannel: Option[Channel] = None
@@ -43,8 +42,8 @@ class ConsumerManager(
   }
   
   private def startUserConsumer(): Unit = {
-    val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare(RabbitMQConfig.Queues.USER_INTERACTIONS, true, false, false, null)
+    val channel = RabbitMQManager.createChannel("user-consumer")
+    channel.queueDeclare(RabbitMQManager.Queues.USER_INTERACTIONS, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -60,18 +59,14 @@ class ConsumerManager(
       }
     }
     
-    val cancelCallback = new CancelCallback {
-      override def handle(consumerTag: String): Unit = 
-        logger.warn(s"User consumer cancelled: $consumerTag")
-    }
-    
-    channel.basicConsume(RabbitMQConfig.Queues.USER_INTERACTIONS, false, deliverCallback, cancelCallback)
+    channel.basicConsume(RabbitMQManager.Queues.USER_INTERACTIONS, false, deliverCallback,
+      consumerTag => logger.warn(s"User consumer cancelled: $consumerTag"))
     userChannel = Some(channel)
   }
   
   private def startEventConsumer(): Unit = {
-    val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare(RabbitMQConfig.Queues.EVENT_UPDATES, true, false, false, null)
+    val channel = RabbitMQManager.createChannel("event-consumer")
+    channel.queueDeclare(RabbitMQManager.Queues.EVENT_UPDATES, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -79,7 +74,7 @@ class ConsumerManager(
         decode[Event](message) match {
           case Right(event) => 
             eventRepo.upsert(event)
-            logger.info(s"Received event update for ${event.eventId}")
+            logger.info(s"Received event update for ${event.id.getOrElse("unknown")}")
           case Left(error) =>
             logger.error(s"Error decoding event message: ${error.getMessage}", error)
         }
@@ -87,14 +82,14 @@ class ConsumerManager(
       }
     }
     
-    channel.basicConsume(RabbitMQConfig.Queues.EVENT_UPDATES, false, deliverCallback,
+    channel.basicConsume(RabbitMQManager.Queues.EVENT_UPDATES, false, deliverCallback,
       consumerTag => logger.warn(s"Event consumer cancelled: $consumerTag"))
     eventChannel = Some(channel)
   }
   
   private def startParticipationConsumer(): Unit = {
-    val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare(RabbitMQConfig.Queues.PARTICIPATION_UPDATES, true, false, false, null)
+    val channel = RabbitMQManager.createChannel("participation-consumer")
+    channel.queueDeclare(RabbitMQManager.Queues.PARTICIPATION_UPDATES, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -110,14 +105,14 @@ class ConsumerManager(
       }
     }
     
-    channel.basicConsume(RabbitMQConfig.Queues.PARTICIPATION_UPDATES, false, deliverCallback,
+    channel.basicConsume(RabbitMQManager.Queues.PARTICIPATION_UPDATES, false, deliverCallback,
       consumerTag => logger.warn(s"Participation consumer cancelled: $consumerTag"))
     participationChannel = Some(channel)
   }
   
   private def startFriendshipConsumer(): Unit = {
-    val channel = RabbitMQConfig.createChannel()
-    channel.queueDeclare(RabbitMQConfig.Queues.FRIENDSHIP_UPDATES, true, false, false, null)
+    val channel = RabbitMQManager.createChannel("friendship-consumer")
+    channel.queueDeclare(RabbitMQManager.Queues.FRIENDSHIP_UPDATES, true, false, false, null)
     
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
@@ -133,29 +128,17 @@ class ConsumerManager(
       }
     }
     
-    channel.basicConsume(RabbitMQConfig.Queues.FRIENDSHIP_UPDATES, false, deliverCallback,
+    channel.basicConsume(RabbitMQManager.Queues.FRIENDSHIP_UPDATES, false, deliverCallback,
       consumerTag => logger.warn(s"Friendship consumer cancelled: $consumerTag"))
     friendshipChannel = Some(channel)
   }
   
   def close(): Unit = {
-    // Close all channels
-    userChannel.foreach { ch => 
-      if (ch.isOpen) ch.close() 
-      logger.info("User channel closed")
-    }
-    eventChannel.foreach { ch => 
-      if (ch.isOpen) ch.close() 
-      logger.info("Event channel closed")
-    }
-    participationChannel.foreach { ch => 
-      if (ch.isOpen) ch.close() 
-      logger.info("Participation channel closed")
-    }
-    friendshipChannel.foreach { ch => 
-      if (ch.isOpen) ch.close() 
-      logger.info("Friendship channel closed")
-    }
+    RabbitMQManager.closeChannel("user-consumer")
+    RabbitMQManager.closeChannel("event-consumer")
+    RabbitMQManager.closeChannel("participation-consumer")
+    RabbitMQManager.closeChannel("friendship-consumer")
+    logger.info("All consumer channels closed")
   }
 }
 

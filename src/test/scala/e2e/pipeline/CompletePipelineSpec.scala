@@ -93,7 +93,7 @@ class CompletePipelineSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       userId = testUserId,
       eventType = "view",
       itemId = Some(testItemId),
-      properties = Map("test" -> "true", "source" -> "e2e_test"),
+      properties = Some(Map("test" -> "true", "source" -> "e2e_test")),
       timestamp = System.currentTimeMillis()
     )
     

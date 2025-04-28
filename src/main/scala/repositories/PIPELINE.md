@@ -4,7 +4,7 @@ Ce document décrit le flux de données à travers notre système de recommandat
 
 ## Pipeline global
 
-[Événements user] → [RabbitMQ [Streaming, Affichage]] → [Service de transformation de données ↔ BD historisés] → [Service de recommandation] → [Affichage] → [Recommandation]
+[Événements user] → [RabbitMQ [Streaming]] → [Service de transformation de données ↔ BD historisés] → [Service de recommandation] → [RabbitMQ [Affichage]] → [Recommandation]
 
 ## Composants et responsabilités
 

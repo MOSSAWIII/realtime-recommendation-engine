@@ -1,13 +1,24 @@
 package unit.repositories
 
-import repositories.Repository
-import java.sql.Connection
+import org.powermock.core.classloader.annotations.PrepareForTest
+import org.powermock.api.mockito.PowerMockito
+import org.mockito.Mockito._
+import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import java.sql.{Connection, PreparedStatement, ResultSet}
 import scala.concurrent.ExecutionContext
+import testutil.TestImports  // Import the new helper
 
-class TestableRepository(mockConnection: Connection)(override implicit val ec: ExecutionContext) extends Repository()(ec) {
-  // Ne pas utiliser 'override' si la méthode n'existe pas dans la classe parente
-  protected def withConnection[T](operation: Connection => T): T = {
-    operation(mockConnection)
-  }
+@PrepareForTest(Array(classOf[config.DatabaseConfig$]))
+class TestableRepositorySpec extends AnyFlatSpec {
+  implicit val ec: ExecutionContext = ExecutionContext.global
+  
+  val mockConnection: Connection = PowerMockito.mock(classOf[Connection])
+  
+  // Use String class name instead of classOf
+  PowerMockito.mockStatic(Class.forName(TestImports.DATABASE_CONFIG_CLASS))
+  PowerMockito.when(config.DatabaseConfig.getConnection).thenReturn(mockConnection)
+  
+  // Your test code...
 }
 

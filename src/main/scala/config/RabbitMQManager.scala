@@ -107,14 +107,10 @@ object RabbitMQManager {
     }
   }
   
-  // Queues standardisées
   object Queues {
-    // Queues d'événements
     val USER_EVENTS = "user_events"
     val RECOMMENDATIONS = "recommendations"
     val INTERNAL_RECOMMENDATION_REQUESTS = "internal_recommendation_requests"
-    
-    // Queues de mise à jour des données
     val USER_INTERACTIONS = "user_interactions"
     val EVENT_UPDATES = "event_updates"
     val PARTICIPATION_UPDATES = "participation_updates"

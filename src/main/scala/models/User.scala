@@ -1,13 +1,15 @@
 package models
 
-import java.time.Instant
+import java.time.LocalDateTime
 
 case class User(
   userId: Long,
-  locale: Option[String] = None,
-  birthYear: Option[Float] = None,
+  name: Option[String] = None,
+  emailAddress: Option[String] = None,
+  locale: String = "en_US",
+  birthYear: Option[Int] = None,
   gender: Option[String] = None,
-  joinedAt: Option[Instant] = None,
   location: Option[String] = None,
-  timezone: Option[Int] = None
+  timezone: Option[Int] = None,
+  isGenerated: Boolean = false
 )

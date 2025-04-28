@@ -1,41 +1,90 @@
 package unit.core
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import org.mockito.Mockito._
-import org.mockito.ArgumentMatchers._
 import core.{StreamingConsumer, Transformer}
 import models.{UserEvent, ProcessedEvent}
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import scala.concurrent.Future
-import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
-import org.scalatest.concurrent.ScalaFutures
-import org.scalatest.time.{Seconds, Span, Millis} // Import Millis
 
-class StreamingConsumerSpec extends AnyFlatSpec with Matchers with ScalaFutures {
+class StreamingConsumerSpec extends AnyFlatSpec with Matchers {
 
-  // --> Increase timeout significantly for diagnosis <--
-  implicit val defaultPatience = PatienceConfig(timeout = Span(30, Seconds), interval = Span(100, Millis))
-
-  "StreamingConsumer" should "correctly pass events to the transformer" in {
-    // Create mocks
-    val mockTransformer = mock(classOf[Transformer])
-
-    // Configure mock behavior
-    val testEvent = UserEvent(userId = 1, eventType = "view", itemId = Some(123))
-    val processedEvent = ProcessedEvent(None, 1, "view", Some(123), Map(), System.currentTimeMillis())
-    when(mockTransformer.processEvent(any[UserEvent])).thenReturn(Future.successful(processedEvent))
-
-    // Create consumer with mocked transformer
+  "StreamingConsumer" should "process events by forwarding them to the transformer" in {
+    // Setup mock transformer
+    val mockTransformer = new MockTransformer()
     val consumer = new StreamingConsumer(mockTransformer)
-
-    // Use the simpler processEvent method
-    val resultFuture = consumer.processEvent(testEvent)
-
-    whenReady(resultFuture) { result =>
-      // Verify transformer was called with correct event
-      verify(mockTransformer).processEvent(testEvent)
-      result shouldBe processedEvent
+    
+    // Test event
+    val testEvent = UserEvent(
+      userId = 123L,
+      eventType = "view",
+      itemId = Some(456L),
+      properties = Some(Map("category" -> "electronics"))
+    )
+    
+    // Process event
+    consumer.processEvent(testEvent)
+    
+    // Verify transformer was called with correct event
+    mockTransformer.lastProcessedEvent shouldBe Some(testEvent)
+  }
+  
+  "StreamingConsumer" should "handle exceptions from transformer gracefully" in {
+    // Setup failing transformer
+    val failingTransformer = new FailingTransformer()
+    val consumer = new StreamingConsumer(failingTransformer)
+    
+    // Test event
+    val testEvent = UserEvent(
+      userId = 123L,
+      eventType = "view",
+      itemId = Some(456L),
+      properties = Some(Map.empty[String, String])
+    )
+    
+    // This should not throw exception
+    noException should be thrownBy {
+      consumer.processEvent(testEvent)
     }
+    
+    // Verify transformer was called
+    failingTransformer.processEventCalled shouldBe true
+  }
+  
+  // Mock transformer that records events
+  class MockTransformer extends Transformer(null) {
+    var lastProcessedEvent: Option[UserEvent] = None
+    
+    override def processEvent(event: UserEvent): Future[ProcessedEvent] = {
+      lastProcessedEvent = Some(event)
+      Future.successful(
+        ProcessedEvent(
+          id = Some(1L),
+          userId = event.userId,
+          eventType = event.eventType,
+          itemId = event.itemId,
+          properties = event.properties.getOrElse(Map.empty[String, String]),
+          timestamp = System.currentTimeMillis(),
+          processingTimestamp = System.currentTimeMillis()
+        )
+      )
+    }
+    
+    // Don't use RabbitMQ in tests
+    override protected def publishRecommendationRequest(request: models.RecommendationRequest): Unit = {}
+    override def close(): Unit = {}
+  }
+  
+  // Transformer that fails when processing events
+  class FailingTransformer extends Transformer(null) {
+    var processEventCalled = false
+    
+    override def processEvent(event: UserEvent): Future[ProcessedEvent] = {
+      processEventCalled = true
+      Future.failed(new RuntimeException("Simulated failure"))
+    }
+    
+    override protected def publishRecommendationRequest(request: models.RecommendationRequest): Unit = {}
+    override def close(): Unit = {}
   }
 }

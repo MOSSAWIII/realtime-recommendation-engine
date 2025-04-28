@@ -2,20 +2,21 @@
 
 // Add testing dependencies
 libraryDependencies ++= Seq(
-  // Use scalatestplus-mockito which brings in mockito-core
+  // --> This line brings in mockito-core 4.6.1 <--
   "org.scalatestplus" %% "mockito-4-6" % "3.2.15.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-scalatest" % "0.41.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.41.0" % Test,
   "org.testcontainers" % "rabbitmq" % "1.19.1" % Test,
   "org.scalatest" %% "scalatest" % "3.2.15" % Test,
 
-  // --> Uncomment these lines to add PowerMock <--
+  // Add PowerMock dependencies
   "org.powermock" % "powermock-module-junit4" % "2.0.9" % Test,
   "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test
 )
 
 // Enable experimental ByteBuddy support
 Test / javaOptions += "-Dnet.bytebuddy.experimental=true"
+javaOptions in Test += "-Dnet.bytebuddy.experimental=true"
 
 // Ensure test classes have access to main resources
 Test / resourceDirectory := (Compile / resourceDirectory).value

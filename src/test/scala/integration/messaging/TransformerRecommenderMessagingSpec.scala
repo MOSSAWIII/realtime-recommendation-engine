@@ -80,7 +80,7 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers with
       userId = testUserId,
       eventType = "view",
       itemId = Some(testItemId),
-      properties = Map("source" -> "messaging_test"),
+      properties = Some(Map("source" -> "messaging_test")),
       timestamp = System.currentTimeMillis()
     )
     

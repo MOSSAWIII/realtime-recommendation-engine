@@ -1,19 +1,17 @@
 package core
 
 import models._
-import repositories.RepositoryInterface
 import config.RabbitMQManager
-import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Success, Failure}
-import org.slf4j.LoggerFactory
+import repositories.Repository
 import io.circe.syntax._
 import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
-import com.rabbitmq.client.Channel  // Add this import
+import scala.concurrent.{ExecutionContext, Future}
+import org.slf4j.LoggerFactory
 
-// Modifier la signature du constructeur
-class Transformer(repository: RepositoryInterface, channel: Channel = RabbitMQManager.createChannel("transformer"))(implicit ec: ExecutionContext) {
+class Transformer(val repository: Repository)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
+  private val channel = RabbitMQManager.createChannel("transformer-publisher")
   
   // Ensure queue exists
   channel.queueDeclare(
@@ -22,61 +20,55 @@ class Transformer(repository: RepositoryInterface, channel: Channel = RabbitMQMa
   )
   
   def processEvent(event: UserEvent): Future[ProcessedEvent] = {
-    logger.debug(s"Traitement de l'événement: $event")
+    logger.info(s"Processing event for user ${event.userId}")
     
-    // 1. Transformation de l'événement
-    val processedEvent = transformEvent(event)
-    
-    // 2. Stockage dans la base de données
-    repository.storeProcessedEvent(processedEvent)
-      .map { storedEvent =>
-        // 3. Publier une demande de recommandation asynchrone via RabbitMQ
-        // au lieu d'appeler directement le Recommender
-        val recommendationRequest = RecommendationRequest(
-          userId = event.userId,
-          timestamp = System.currentTimeMillis()
-        )
-        
-        val requestJson = recommendationRequest.asJson.noSpaces
-        
-        channel.basicPublish(
-          "",  // échange par défaut
-          RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS,
-          null,
-          requestJson.getBytes(StandardCharsets.UTF_8)
-        )
-        
-        logger.info(s"Demande de recommandation publiée pour l'utilisateur ${event.userId}")
-        storedEvent
-      }
-      .recoverWith { case e: Exception =>
-        logger.error(s"Erreur lors du traitement de l'événement: ${e.getMessage}", e)
-        Future.failed(e)
-      }
-  }
-  
-  private def transformEvent(event: UserEvent): ProcessedEvent = {
-    // Transformation simple: nettoyage et enrichissement des données
-    val cleanedProperties = event.properties.map {
-      case (key, value) => (key.toLowerCase.trim, value.trim)
-    }.filter {
-      case (key, value) => key.nonEmpty && value.nonEmpty
-    }
-    
-    // Ajout de propriétés supplémentaires si nécessaire
-    val enrichedProperties = cleanedProperties + ("processed_at" -> System.currentTimeMillis().toString)
-    
-    ProcessedEvent(
+    // Convert to ProcessedEvent
+    val processedEvent = ProcessedEvent(
+      id = None,
       userId = event.userId,
       eventType = event.eventType,
       itemId = event.itemId,
-      properties = enrichedProperties,
+      properties = event.properties.getOrElse(Map.empty),
       timestamp = event.timestamp,
       processingTimestamp = System.currentTimeMillis()
     )
+    
+    // Store in repository
+    val future = repository.storeProcessedEvent(processedEvent)
+    
+    future.foreach { savedEvent =>
+      // Only trigger recommendations for events with item IDs
+      if (savedEvent.itemId.isDefined) {
+        // Send to recommendation service
+        val request = RecommendationRequest(
+          userId = savedEvent.userId,
+          timestamp = System.currentTimeMillis()
+        )
+        publishRecommendationRequest(request)
+      }
+    }
+    
+    future
+  }
+  
+  protected def publishRecommendationRequest(request: RecommendationRequest): Unit = {
+    try {
+      val jsonPayload = request.asJson.noSpaces
+      channel.basicPublish(
+        "",  // Default exchange
+        RabbitMQManager.Queues.INTERNAL_RECOMMENDATION_REQUESTS,
+        null, // Default properties
+        jsonPayload.getBytes(StandardCharsets.UTF_8)
+      )
+      logger.debug(s"Published recommendation request for user ${request.userId}")
+    } catch {
+      case ex: Exception => 
+        logger.error(s"Failed to publish recommendation request: ${ex.getMessage}", ex)
+    }
   }
   
   def close(): Unit = {
-    RabbitMQManager.closeChannel("transformer")
+    RabbitMQManager.closeChannel("transformer-publisher")
+    logger.info("Transformer closed")
   }
 }
