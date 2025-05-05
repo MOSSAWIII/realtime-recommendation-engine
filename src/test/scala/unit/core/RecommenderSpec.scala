@@ -102,15 +102,13 @@ class RecommenderSpec extends AnyFlatSpec with Matchers {
   class MockRepository(emptyHistory: Boolean = false, frequencyTest: Boolean = false) extends Repository {
     var storedRecommendation: Option[Recommendation] = None
     
-    override def getProcessedEventsForUser(userId: Long): Future[List[ProcessedEvent]] = {
-      if (emptyHistory) {
-        Future.successful(List.empty)
-      } else if (frequencyTest) {
-        // Create history with one item having more interactions
+    override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = {
+      if (userId == 42) {
+        // Test case with duplicate item IDs
         val now = System.currentTimeMillis()
         Future.successful(List(
           ProcessedEvent(Some(1L), userId, "view", Some(101L), Map.empty, now - 10000),
-          ProcessedEvent(Some(2L), userId, "view", Some(102L), Map.empty, now - 9000),
+          ProcessedEvent(Some(2L), userId, "view", Some(101L), Map.empty, now - 9000),
           ProcessedEvent(Some(3L), userId, "view", Some(102L), Map.empty, now - 8000),
           ProcessedEvent(Some(4L), userId, "view", Some(102L), Map.empty, now - 7000)
         ))

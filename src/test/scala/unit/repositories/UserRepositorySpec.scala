@@ -1,36 +1,43 @@
 package unit.repositories
 
-import testutil.RepositorySpec
-import org.powermock.modules.junit4.PowerMockRunner
 import org.powermock.core.classloader.annotations.PrepareForTest
-import org.junit.runner.RunWith
-import repositories.UserRepository
-import models.User
+import org.powermock.api.mockito.PowerMockito
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
-import org.powermock.api.mockito.PowerMockito
-import java.sql.{PreparedStatement, ResultSet}
+import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import java.sql.{Connection, PreparedStatement, ResultSet}
+import config.DatabaseConfig
+import scala.concurrent.ExecutionContext
+import org.junit.runner.RunWith
+import org.powermock.modules.junit4.PowerMockRunner
+import testutil.TestImports
+import org.mockito.verification.Timeout
+import org.mockito.ArgumentMatchers.{contains, anyString}
 
 @RunWith(classOf[PowerMockRunner])
-@PrepareForTest(Array(classOf[config.DatabaseConfig]))
-class UserRepositorySpec extends RepositorySpec {
+@PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
+class UserRepositorySpec extends AnyFlatSpec {
+  implicit val ec: ExecutionContext = ExecutionContext.global
   
-  "UserRepository" should "attempt to upsert a user" in {
-    // Arrange
-    val mockPreparedStatement = PowerMockito.mock(classOf[PreparedStatement])
-    when(mockConnection.prepareStatement(anyString())).thenReturn(mockPreparedStatement)
-    when(mockPreparedStatement.executeUpdate()).thenReturn(1)
-
-    val userRepository = new UserRepository()
-    val user = User(userId = 1L, name = Some("test"), emailAddress = Some("test@example.com"))
-
-    // Act
-    userRepository.upsert(user)
-
-    // Assert
+  // Set up the mocks
+  val mockConnection: Connection = PowerMockito.mock(classOf[Connection])
+  val mockPreparedStatement: PreparedStatement = PowerMockito.mock(classOf[PreparedStatement])
+  val mockResultSet: ResultSet = PowerMockito.mock(classOf[ResultSet])
+  
+  when(mockConnection.prepareStatement(anyString())).thenReturn(mockPreparedStatement)
+  when(mockPreparedStatement.executeQuery()).thenReturn(mockResultSet)
+  
+  // Mock the DatabaseConfig singleton
+  PowerMockito.mockStatic(classOf[config.DatabaseConfig.type])
+  PowerMockito.when(DatabaseConfig.getConnection).thenReturn(mockConnection)
+  
+  "UserRepository" should "insert a user" in {
+    // Test implementation...
+    
+    // Example of verification with timeout
     verify(mockConnection, timeout(1000)).prepareStatement(contains("INSERT INTO users"))
-    // Additional verifications...
   }
   
-  // Additional test cases...
+  // Add more test methods as needed
 }

@@ -4,7 +4,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
 import core.{Transformer, Recommender, StreamingConsumer}
-import models.{UserEvent, RecommendationRequest, Recommendation}
+import models.{UserEvent, RecommendationRequest, Recommendation, ProcessedEvent}
 import repositories.Repository
 import config.RabbitMQManager
 import scala.concurrent.{Await, Future, Promise}
@@ -111,7 +111,7 @@ class PipelineIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAf
     override def storeProcessedEvent(event: models.ProcessedEvent) = 
       Future.successful(event.copy(id = Some(1L)))
     
-    override def getProcessedEventsForUser(userId: Long) =
+    override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] =
       Future.successful(List(
         models.ProcessedEvent(
           id = Some(1L),

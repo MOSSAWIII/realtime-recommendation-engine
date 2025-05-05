@@ -14,7 +14,7 @@ import org.powermock.modules.junit4.PowerMockRunner
 import org.junit.runner.RunWith
 
 @RunWith(classOf[PowerMockRunner])
-@PrepareForTest(Array(classOf[config.DatabaseConfig]))
+@PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
 class RepositorySpec extends AnyFunSuite with BeforeAndAfterEach {
 
   var mockConnection: Connection = _
@@ -26,7 +26,7 @@ class RepositorySpec extends AnyFunSuite with BeforeAndAfterEach {
     mockPreparedStatement = PowerMockito.mock(classOf[PreparedStatement])
     mockResultSet = PowerMockito.mock(classOf[ResultSet])
     
-    PowerMockito.mockStatic(classOf[config.DatabaseConfig])
+    PowerMockito.mockStatic(classOf[config.DatabaseConfig.type])
     when(config.DatabaseConfig.getConnection).thenReturn(mockConnection)
     when(mockConnection.prepareStatement(ArgumentMatchers.anyString())).thenReturn(mockPreparedStatement)
   }

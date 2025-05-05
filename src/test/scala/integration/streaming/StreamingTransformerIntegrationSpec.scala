@@ -219,8 +219,7 @@ class TestStreamingConsumer(transformer: Transformer, testQueueName: String)(imp
 
 class TestableRepository(mockConnection: Connection)(override implicit val ec: ExecutionContext) extends Repository()(ec) {
   
-  // Change from override to a new method
-  protected def withConnection[T](operation: Connection => T): T = {
+  override protected def withConnection[T](operation: Connection => T): T = {
     operation(mockConnection)
   }
 }

@@ -16,16 +16,16 @@ import config._
 import scala.concurrent.Future
 
 @RunWith(classOf[PowerMockRunner])
-@PrepareForTest(Array(classOf[config.DatabaseConfig]))
+@PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
 class FriendsRepositoryBaseSpec extends AnyFlatSpec with Matchers {
   // Setup mock
   val mockConnection = PowerMockito.mock(classOf[Connection])
-  PowerMockito.mockStatic(classOf[config.DatabaseConfig])
+  PowerMockito.mockStatic(classOf[config.DatabaseConfig.type])
   when(config.DatabaseConfig.getConnection).thenReturn(mockConnection)
 }
 
 @RunWith(classOf[PowerMockRunner])
-@PrepareForTest(Array(classOf[config.DatabaseConfig]))
+@PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
 class FriendsRepositorySpec extends FriendsRepositoryBaseSpec {
 
   "FriendsRepository" should "attempt to upsert user friends" in {

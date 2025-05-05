@@ -2,16 +2,13 @@
 
 // Add testing dependencies
 libraryDependencies ++= Seq(
-  // --> This line brings in mockito-core 4.6.1 <--
-  "org.scalatestplus" %% "mockito-4-6" % "3.2.15.0" % Test,
+  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
+  "org.mockito" % "mockito-core" % "4.6.1" % Test,
+  "org.powermock" % "powermock-module-junit4" % "2.0.9" % Test,
+  "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test,
   "com.dimafeng" %% "testcontainers-scala-scalatest" % "0.41.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.41.0" % Test,
-  "org.testcontainers" % "rabbitmq" % "1.19.1" % Test,
-  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
-
-  // Add PowerMock dependencies
-  "org.powermock" % "powermock-module-junit4" % "2.0.9" % Test,
-  "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test
+  "org.testcontainers" % "rabbitmq" % "1.19.1" % Test
 )
 
 // Enable experimental ByteBuddy support
@@ -70,3 +67,13 @@ Test / test := (Test / test).dependsOn(Test / clean).value
 
 // Remove or comment out this line if it exists
 // "org.scalatest" %% "scalatest-concurrent" % "3.2.15" % Test
+
+// Additional configuration for PowerMock with ScalaTest
+
+// Make sure the PowerMock bytecode manipulation works with the JVM
+fork in Test := true
+javaOptions in Test += "-Dorg.powermock.bytebuddy.mode=true"
+
+// For PowerMock to work with Scala objects (which are singletons)
+// we need to add this annotation processor
+javaOptions in Test += "-Djdk.attach.allowAttachSelf=true"

@@ -7,6 +7,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.BeforeAndAfterEach
 import scala.concurrent.ExecutionContext
 import scala.concurrent.ExecutionContext.Implicits.global
+import testutil.MockProvider  // Add this import
 
 // Base spec for unit tests using FlatSpec style
 abstract class UnitSpec extends AnyFlatSpec with Matchers {
@@ -25,7 +26,7 @@ abstract class IntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndA
 
 // Base spec for repository tests
 abstract class RepositorySpec extends UnitSpec with BeforeAndAfterEach {
-  // Common repository test setup 
-  val mockConnection = MockProvider.mockDatabaseConfig()
+  // Use TestImports instead of MockProvider
+  val mockConnection = TestImports.mockDatabaseConfig()
 }
 

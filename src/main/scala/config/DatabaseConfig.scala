@@ -12,14 +12,18 @@ object DatabaseConfig {
   
   private val hikariConfig = new HikariConfig()
   hikariConfig.setJdbcUrl(config.getString("url"))
-  hikariConfig.setUsername(config.getString("username"))
+  hikariConfig.setUsername(config.getString("user")) // Changed from "username" to match config
   hikariConfig.setPassword(config.getString("password"))
   hikariConfig.setMaximumPoolSize(config.getInt("poolSize"))
-  hikariConfig.setConnectionTimeout(config.getLong("connectionTimeout"))
+  // Only set connectionTimeout if it exists in config
+  if (config.hasPath("connectionTimeout")) {
+    hikariConfig.setConnectionTimeout(config.getLong("connectionTimeout"))
+  }
   
   private val dataSource = new HikariDataSource(hikariConfig)
   
-  def getConnection(): Connection = {
+  // Remove the parentheses to make it consistent
+  def getConnection: Connection = {
     dataSource.getConnection()
   }
   

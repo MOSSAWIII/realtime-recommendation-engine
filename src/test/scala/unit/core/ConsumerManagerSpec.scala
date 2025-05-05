@@ -15,31 +15,37 @@ import repositories.{UserRepository, EventRepository, ParticipationRepository, F
 import config.RabbitMQConfig
 import io.circe.syntax._
 import io.circe.generic.auto._
-import testutil.TestImports // Import the new helper
+import testutil.TestImports
 
 import java.nio.charset.StandardCharsets
 import scala.concurrent.ExecutionContext.Implicits.global
 
-@PrepareForTest(Array(classOf[config.RabbitMQConfig$]))
-class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
+import org.powermock.modules.junit4.PowerMockRunner
+import org.junit.runner.RunWith
 
-  var mockUserRepo: UserRepository = _
-  var mockEventRepo: EventRepository = _
-  var mockParticipationRepo: ParticipationRepository = _
-  var mockFriendsRepo: FriendsRepository = _
+@RunWith(classOf[PowerMockRunner])
+@PrepareForTest(Array(classOf[config.RabbitMQConfig.type]))
+class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
+  
+  var userRepository: UserRepository = _
+  var eventRepository: EventRepository = _
+  var participationRepository: ParticipationRepository = _
+  var friendsRepository: FriendsRepository = _
+  var consumerManager: ConsumerManager = _
+  
+  // Use TestImports.mockRabbitMQConfig() which we added to that class
+  val mockChannel: Channel = TestImports.mockRabbitMQConfig()
+
   var mockDelivery: Delivery = _
   var mockEnvelope: Envelope = _
 
-  // Use the helper method
-  val mockChannel: Channel = TestImports.mockRabbitMQConfig()
-
   override def beforeEach(): Unit = {
-    PowerMockito.mockStatic(classOf[config.RabbitMQConfig])
+    PowerMockito.mockStatic(classOf[config.RabbitMQConfig.type])
     
-    mockUserRepo = PowerMockito.mock(classOf[UserRepository])
-    mockEventRepo = PowerMockito.mock(classOf[EventRepository])
-    mockParticipationRepo = PowerMockito.mock(classOf[ParticipationRepository])
-    mockFriendsRepo = PowerMockito.mock(classOf[FriendsRepository])
+    userRepository = PowerMockito.mock(classOf[UserRepository])
+    eventRepository = PowerMockito.mock(classOf[EventRepository])
+    participationRepository = PowerMockito.mock(classOf[ParticipationRepository])
+    friendsRepository = PowerMockito.mock(classOf[FriendsRepository])
     mockDelivery = PowerMockito.mock(classOf[Delivery])
     mockEnvelope = PowerMockito.mock(classOf[Envelope])
     
@@ -62,11 +68,11 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
       "consumerTag"
     })
 
-    val consumerManager = new ConsumerManager(mockUserRepo, mockEventRepo, mockParticipationRepo, mockFriendsRepo)
+    consumerManager = new ConsumerManager(userRepository, eventRepository, participationRepository, friendsRepository)
     consumerManager.startAllConsumers()
     
     // Verify the repository was called with the correct user object
-    verify(mockUserRepo, timeout(1000)).upsert(ArgumentMatchers.eq(
+    verify(userRepository, timeout(1000)).upsert(ArgumentMatchers.eq(
       User(userId = 1L, name = Some("testuser"), emailAddress = Some("test@example.com"))
     ))
   }
@@ -88,7 +94,7 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
       any[com.rabbitmq.client.CancelCallback]
     )).thenReturn("consumerTag")
     
-    val consumerManager = new ConsumerManager(mockUserRepo, mockEventRepo, mockParticipationRepo, mockFriendsRepo)
+    consumerManager = new ConsumerManager(userRepository, eventRepository, participationRepository, friendsRepository)
     consumerManager.startAllConsumers()
     
     // Manually invoke the callback with our mock delivery
@@ -102,7 +108,7 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
     callback.handle("consumer-tag", mockDelivery)
     
     // Verify the repository was called with the correct event object
-    verify(mockEventRepo, timeout(1000)).upsert(ArgumentMatchers.eq(event))
+    verify(eventRepository, timeout(1000)).upsert(ArgumentMatchers.eq(event))
   }
 
   test("Participation consumer should process messages correctly") {
@@ -120,7 +126,7 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
       any[com.rabbitmq.client.CancelCallback]
     )).thenReturn("consumerTag")
     
-    val consumerManager = new ConsumerManager(mockUserRepo, mockEventRepo, mockParticipationRepo, mockFriendsRepo)
+    consumerManager = new ConsumerManager(userRepository, eventRepository, participationRepository, friendsRepository)
     consumerManager.startAllConsumers()
     
     verify(mockChannel).basicConsume(ArgumentMatchers.eq(config.RabbitMQConfig.Queues.PARTICIPATION_UPDATES), 
@@ -128,7 +134,7 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
     val callback = callbackCaptor.getValue
     callback.handle("consumer-tag", mockDelivery)
     
-    verify(mockParticipationRepo, timeout(1000)).upsert(ArgumentMatchers.eq(participation))
+    verify(participationRepository, timeout(1000)).upsert(ArgumentMatchers.eq(participation))
   }
 
   test("Friendship consumer should process messages correctly") {
@@ -146,7 +152,7 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
       any[com.rabbitmq.client.CancelCallback]
     )).thenReturn("consumerTag")
     
-    val consumerManager = new ConsumerManager(mockUserRepo, mockEventRepo, mockParticipationRepo, mockFriendsRepo)
+    consumerManager = new ConsumerManager(userRepository, eventRepository, participationRepository, friendsRepository)
     consumerManager.startAllConsumers()
     
     verify(mockChannel).basicConsume(ArgumentMatchers.eq(config.RabbitMQConfig.Queues.FRIENDSHIP_UPDATES), 
@@ -154,6 +160,6 @@ class ConsumerManagerSpec extends AnyFunSuite with BeforeAndAfterEach {
     val callback = callbackCaptor.getValue
     callback.handle("consumer-tag", mockDelivery)
     
-    verify(mockFriendsRepo, timeout(1000)).upsert(ArgumentMatchers.eq(friendship))
+    verify(friendsRepository, timeout(1000)).upsert(ArgumentMatchers.eq(friendship))
   }
 }

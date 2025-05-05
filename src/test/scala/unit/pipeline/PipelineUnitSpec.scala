@@ -115,8 +115,8 @@ class PipelineUnitSpec extends AnyFlatSpec with Matchers {
       Future.successful(event.copy(id = Some(1L)))
     }
     
-    override def getProcessedEventsForUser(userId: Long): Future[List[ProcessedEvent]] = {
-      Future.successful(events.filter(_.userId == userId))
+    override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = {
+      Future.successful(events.filter(_.userId == userId).take(limit))
     }
     
     override def storeRecommendation(recommendation: Recommendation): Future[Recommendation] = {
