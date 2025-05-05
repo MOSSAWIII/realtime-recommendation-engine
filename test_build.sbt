@@ -11,33 +11,11 @@ libraryDependencies ++= Seq(
   "org.testcontainers" % "rabbitmq" % "1.19.1" % Test
 )
 
-// Enable experimental ByteBuddy support
+// Enable experimental ByteBuddy support (fixed deprecated 'in')
 Test / javaOptions += "-Dnet.bytebuddy.experimental=true"
-javaOptions in Test += "-Dnet.bytebuddy.experimental=true"
 
 // Ensure test classes have access to main resources
 Test / resourceDirectory := (Compile / resourceDirectory).value
-
-// Fix import issues by making the following changes to your test files:
-// 1. Add to StreamingTransformerIntegrationSpec.scala:
-//    import scala.concurrent.ExecutionContext
-
-// 2. Add to StreamingConsumerSpec.scala:
-//    import models.ProcessedEvent
-//    And fix the MockTransformer class to not use private method transformEvent
-
-// 3. Fix Recommendation constructor in RepositorySpec.scala:
-//    val recommendation = Recommendation(
-//      id = Some(1),
-//      userId = 42,
-//      recommendedItems = List(RecommendedItem(101, 0.9, "test")),
-//      score = 0.95, // Add this missing parameter
-//      timestamp = System.currentTimeMillis()
-//    )
-
-// 4. Fix ambiguous implicit in RepositorySpec.scala:
-//    class TestableRepository(mockConnection: Connection)(override implicit val ec: ExecutionContext) extends Repository
-//    OR remove the global import
 
 // Show full stack traces on test failures
 Test / testOptions += Tests.Argument("-oF")
@@ -54,26 +32,41 @@ Test / parallelExecution := false  // Set to true when tests don't interfere wit
 // Ensure clean before tests
 Test / test := (Test / test).dependsOn(Test / clean).value
 
-// Import section fixes:
-// 1. Add to your test files that use ExecutionContext:
-// import scala.concurrent.ExecutionContext
-// import scala.concurrent.ExecutionContext.Implicits.global
+// Custom test commands
+addCommandAlias(
+  "runStreamingTest",
+  ";clean ;testOnly integration.streaming.StreamingTransformerIntegrationSpec"
+)
 
-// 2. Add to files that use ProcessedEvent:
-// import models.ProcessedEvent
+addCommandAlias(
+  "runAllIntegrationTests",
+  ";clean ;testOnly integration.**"
+)
 
-// 3. For files that have model construction issues:
-// Check parameter lists and ensure all required fields are provided
+// Task to run Docker-dependent tests
+lazy val dockerTests = taskKey[Unit]("Run tests with Docker dependencies")
 
-// Remove or comment out this line if it exists
-// "org.scalatest" %% "scalatest-concurrent" % "3.2.15" % Test
+dockerTests := {
+  import scala.sys.process._
+  
+  val s = streams.value
+  val log = s.log
+  
+  log.info("Stopping any running test containers...")
+  "docker-compose -f docker-compose-test.yml down --remove-orphans".!
+  
+  log.info("Starting test containers...")
+  "docker-compose -f docker-compose-test.yml up -d test-db test-rabbitmq".!
+  
+  log.info("Waiting for containers to initialize...")
+  Thread.sleep(30000) // 30 seconds
+  
+  log.info("Running transformer integration test...")
+  (Test / testOnly).toTask(" integration.streaming.StreamingTransformerIntegrationSpec").value
+  
+  log.info("Test completed, stopping containers...")
+  "docker-compose -f docker-compose-test.yml down".!
+}
 
-// Additional configuration for PowerMock with ScalaTest
-
-// Make sure the PowerMock bytecode manipulation works with the JVM
-fork in Test := true
-javaOptions in Test += "-Dorg.powermock.bytebuddy.mode=true"
-
-// For PowerMock to work with Scala objects (which are singletons)
-// we need to add this annotation processor
-javaOptions in Test += "-Djdk.attach.allowAttachSelf=true"
+// Extra settings (fixed deprecated 'in')
+Test / javaOptions += "-Djdk.attach.allowAttachSelf=true"

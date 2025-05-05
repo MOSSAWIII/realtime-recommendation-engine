@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   test-db:
     image: postgres:14
@@ -10,8 +8,8 @@ services:
       - "5433:5432"  # Different port to avoid conflicts
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 5s
-      timeout: 5s
+      interval: 2s
+      timeout: 2s
       retries: 5
     networks:
       default:
@@ -21,16 +19,21 @@ services:
   test-rabbitmq:
     image: rabbitmq:3-management
     ports:
-      - "15673:15672"  # Different port
-      - "5673:5672"    # Add AMQP port
+      - "15673:15672"  # Management UI
+      - "5673:5672"    # AMQP port
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     healthcheck:
       test: ["CMD", "rabbitmqctl", "status"]
-      interval: 5s
-      timeout: 5s
+      interval: 15s
+      timeout: 15s
       retries: 5
+      start_period: 40s
+    networks:
+      default:
+        aliases:
+          - rabbitmq
 
   test-runner:
     build:
@@ -45,7 +48,11 @@ services:
       - DB_PASSWORD=test_password
       - RABBITMQ_HOST=test-rabbitmq
       - RABBITMQ_PORT=5672
-      - DATABASE_URL=jdbc:postgresql://test-db:5432/recommendation_engine
+      - DATABASE_URL=jdbc:postgresql://test-db:5432/test_recommendation_engine
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=test_password
+      - DATABASE_HOST=test-db
+      - DATABASE_PORT=5432
     volumes:
       - .:/app
       - ~/.sbt:/root/.sbt
@@ -55,4 +62,7 @@ services:
         condition: service_healthy
       test-rabbitmq:
         condition: service_healthy
-    command: sbt test  # Default command runs all tests
+    networks:
+      default:
+        aliases:
+          - test-client

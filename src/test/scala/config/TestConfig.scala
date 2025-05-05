@@ -51,12 +51,13 @@ object RabbitMQConfig {
   }
   
   object Queues {
-    val USER_INTERACTIONS = "user-interactions"
-    val EVENT_UPDATES = "event-updates"
-    val PARTICIPATION_UPDATES = "participation-updates"
-    val FRIENDSHIP_UPDATES = "friendship-updates"
-    val USER_EVENTS = "user-events"
+    val USER_INTERACTIONS = "user_interactions"
+    val EVENT_UPDATES = "event_updates"
+    val PARTICIPATION_UPDATES = "participation_updates"
+    val FRIENDSHIP_UPDATES = "friendship_updates"
+    val INTERNAL_RECOMMENDATION_REQUESTS = "internal_recommendation_requests"
     val RECOMMENDATIONS = "recommendations"
+    val USER_EVENTS = "user_events"
   }
 }
 

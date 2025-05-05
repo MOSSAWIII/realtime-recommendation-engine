@@ -11,7 +11,10 @@ object RabbitMQConfig {
   private val logger = LoggerFactory.getLogger(getClass)
   
   // Create a channel without component tracking for backward compatibility
-  def createChannel(): Channel = null
+  def createChannel(): Channel = {
+    logger.debug("Creating channel via compatibility layer")
+    RabbitMQManager.getChannel("legacy-channel")
+  }
   
   def closeConnection(): Unit = {
     logger.debug("Closing connection via compatibility layer")

@@ -9,7 +9,11 @@ import io.circe.syntax._
 import io.circe.generic.auto._
 import org.slf4j.LoggerFactory
 
-class Repository(implicit val ec: ExecutionContext) extends RepositoryInterface {
+/**
+ * Implementation of the Repository interface that connects to a real database.
+ * Requires an implicit ExecutionContext for asynchronous operations.
+ */
+class Repository(implicit override val ec: ExecutionContext) extends RepositoryInterface {
   
   private val logger = LoggerFactory.getLogger(getClass)
 
@@ -219,4 +223,19 @@ class Repository(implicit val ec: ExecutionContext) extends RepositoryInterface 
       }
     }
   }
+}
+
+/**
+ * Companion object providing factory methods for Repository instance creation
+ */
+object Repository {
+  /**
+   * Creates a default repository implementation
+   */
+  def default(implicit ec: ExecutionContext): RepositoryInterface = new DefaultRepository()
+  
+  /**
+   * Creates a new Repository with the provided ExecutionContext
+   */
+  def apply(implicit ec: ExecutionContext): Repository = new Repository()
 }
