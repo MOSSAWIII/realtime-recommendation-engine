@@ -1,6 +1,6 @@
 package integration
 
-import com.dimafeng.testcontainers.{PostgreSQLContainer, ForAllTestContainer}
+import com.dimafeng.testcontainers.{PostgreSQLContainer, ForAllTestContainer, MultipleContainers}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.concurrent.{Eventually, ScalaFutures}
 import org.scalatest.matchers.should.Matchers
@@ -26,29 +26,22 @@ abstract class IntegrationTestBase extends AnyWordSpec
     interval = scaled(Span(100, Millis))
   )
   
-  // Define both containers in a container
-  override val container = {
-    // Start PostgreSQL container
-    val postgres = PostgreSQLContainer()
-      .configure { container =>
-        container.withDatabaseName("test_recommendation_engine")
-        container.withUsername("postgres")
-        container.withPassword("test_password")
-      }
-    
-    // Use our wrapper for RabbitMQ container
-    val rabbitMq = new RabbitMQContainer("rabbitmq:3-management")
-    
-    // Use MultipleContainers to combine both
-    com.dimafeng.testcontainers.MultipleContainers(postgres, rabbitMq)
-  }
+  // Define containers individually
+  protected val pgContainer = PostgreSQLContainer()
+    .configure { container =>
+      container.withDatabaseName("test_recommendation_engine")
+      container.withUsername("postgres")
+      container.withPassword("test_password")
+    }
+  
+  protected val rmqContainer = new RabbitMQContainer("rabbitmq:3-management")
+  
+  // Combined container for ForAllTestContainer trait
+  override val container = MultipleContainers(pgContainer, rmqContainer)
 
-  // Define container accessor methods to make them available to tests
-  protected def postgresContainer: PostgreSQLContainer = 
-    container.containers.head.asInstanceOf[PostgreSQLContainer]
-    
-  protected def rabbitMqContainer: RabbitMQContainer = 
-    container.containers(1).asInstanceOf[RabbitMQContainer]
+  // Simplified accessor methods
+  protected def postgresContainer: PostgreSQLContainer = pgContainer
+  protected def rabbitMqContainer: RabbitMQContainer = rmqContainer
   
   // Test-specific configuration
   protected var testConfig: Config = _

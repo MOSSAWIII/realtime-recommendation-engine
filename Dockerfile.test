@@ -1,19 +1,30 @@
 FROM sbtscala/scala-sbt:eclipse-temurin-jammy-17.0.8.1_1_1.9.6_2.13.12
 
+# Install Docker CLI for TestContainers - fixed installation process
+RUN apt-get update && \
+    apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y docker-ce-cli && \
+    # Verify docker is installed properly
+    docker --version
+
 WORKDIR /app
 
-# Copier d'abord les fichiers de configuration
+# Copy project configuration files
 COPY project/ project/
 COPY build.sbt .
 
-# Pré-télécharger les dépendances
+# Pre-download the dependencies
 RUN sbt update
 
-# Copier le code source et les tests
+# Copy the source code and tests
 COPY src/ src/
 
-# Configuration test-specific
+# Test-specific configuration
 COPY src/test/resources/application-test.conf /app/src/main/resources/application.conf
 
-# Compiler le projet mais ne pas lancer les tests
+# Compile the project but don't run the tests
 RUN sbt compile

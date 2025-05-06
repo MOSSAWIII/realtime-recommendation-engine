@@ -53,10 +53,13 @@ services:
       - DATABASE_PASSWORD=test_password
       - DATABASE_HOST=test-db
       - DATABASE_PORT=5432
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
     volumes:
       - .:/app
       - ~/.sbt:/root/.sbt
       - ~/.ivy2:/root/.ivy2
+      - ~/.colima/default/docker.sock:/var/run/docker.sock
     depends_on:
       test-db:
         condition: service_healthy
