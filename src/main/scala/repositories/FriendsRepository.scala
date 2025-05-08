@@ -1,6 +1,6 @@
 package repositories
 
-import models.{Friendship, UserFriends}
+import models.{Friendship, UserFriends, UserFriend}
 import config.DatabaseConfig
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import scala.concurrent.{ExecutionContext, Future}
@@ -70,7 +70,8 @@ class FriendsRepository(implicit override val ec: ExecutionContext) extends Repo
           friends_list = EXCLUDED.friends_list
       """
       
-      val friendsList = userFriends.friendIds.mkString(" ")
+      // Extract just the friend IDs for storage
+      val friendsList = userFriends.friends.map(_.friendId).mkString(" ")
       
       withPreparedStatement(connection, sql) { ps =>
         ps.setLong(1, userFriends.userId)
@@ -93,17 +94,17 @@ class FriendsRepository(implicit override val ec: ExecutionContext) extends Repo
     val userIdValue = rs.getLong("user_id")
     val friendsListStr = rs.getString("friends_list")
     
-    val friendIdsList = if (friendsListStr != null && friendsListStr.nonEmpty) {
+    val friendsList = if (friendsListStr != null && friendsListStr.nonEmpty) {
       friendsListStr.split(" ").flatMap(id => 
         Try(id.trim.toLong).toOption
-      ).toList
+      ).map(friendId => UserFriend(userIdValue, friendId, 1.0)).toList
     } else {
-      List.empty[Long]
+      List.empty[UserFriend]
     }
     
     UserFriends(
       userId = userIdValue,
-      friendIds = friendIdsList
+      friends = friendsList
     )
   }
 }

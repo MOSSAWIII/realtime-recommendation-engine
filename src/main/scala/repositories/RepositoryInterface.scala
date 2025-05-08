@@ -16,6 +16,11 @@ trait RepositoryInterface {
   def getRecommendationForUser(userId: Long): Future[Option[Recommendation]]
   def getRecentRecommendationForUser(userId: Long, timeWindow: Long): Future[Option[Recommendation]]
   
+  // New methods for Phase 2
+  def getUserProfile(userId: Long): Future[Option[User]]
+  def getUserFriends(userId: Long): Future[List[UserFriend]]
+  def getAllActiveEvents(): Future[List[Event]]
+  
   // Database setup
   def initTables(): Future[Unit]
 }

@@ -5,38 +5,44 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
 import core.{Transformer, Recommender}
 import repositories.Repository
-import models.{UserEvent, ProcessedEvent}
+import models.{UserEvent, ProcessedEvent, Recommendation, RecommendedItem}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
+import config.DatabaseConfig
+import org.slf4j.LoggerFactory
 
 class TransformerRecommenderIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
   
-  var repository: Repository = _
+  private val logger = LoggerFactory.getLogger(getClass)
+  var repository: TestRepository = _
   var transformer: Transformer = _
   var recommender: Recommender = _
   
   override def beforeAll(): Unit = {
-    repository = new Repository()
+    // Use a TestRepository instead of the real Repository
+    repository = new TestRepository()
     transformer = new Transformer(repository)
     recommender = new Recommender(repository)
     
-    // Initialiser la base de données
+    // Initialize the repository
     Await.result(repository.initTables(), 5.seconds)
     
-    // Démarrer le consumer de recommandations
+    // Start the recommender service
     recommender.start()
   }
   
   override def afterAll(): Unit = {
-    recommender.close()
+    if (recommender != null) {
+      recommender.close()
+    }
   }
   
   "Transformer and Recommender" should "work together to process events and generate recommendations" in {
-    // Arrange: Utilisateur de test
+    // Arrange: Test user
     val userId = 100L
     
-    // Créer plusieurs événements pour le même item
+    // Create multiple events for the same item
     val events = (1 to 5).map { i =>
       UserEvent(
         userId = userId,
@@ -46,15 +52,20 @@ class TransformerRecommenderIntegrationSpec extends AnyFlatSpec with Matchers wi
       )
     }.toList
     
-    // Act: Traiter tous les événements
+    // Act: Process all events
     val futures = events.map(transformer.processEvent)
     Await.result(Future.sequence(futures), 10.seconds)
     
-    // Laisser le temps au Recommender de générer des recommandations
+    // Allow time for the Recommender to generate recommendations
     Thread.sleep(5000)
     
-    // Assert: Vérifier qu'une recommandation a été générée
+    // Assert: Verify a recommendation was generated
     val recommendation = Await.result(repository.getRecommendationForUser(userId), 5.seconds)
+    
+    // Log recommendation details for debugging
+    logger.info(s"Retrieved recommendation: $recommendation")
+    logger.info(s"Available recommendations: ${repository.mockRecommendations}")
+    
     recommendation shouldBe defined
     recommendation.get.userId shouldBe userId
     recommendation.get.recommendedItems.find(_.itemId == 200L) shouldBe defined

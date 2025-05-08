@@ -1,7 +1,15 @@
 package models
 
+/**
+ * Request for generating recommendations for a user
+ *
+ * @param userId ID of the user to generate recommendations for
+ * @param contextItemId Optional item ID that provides context (e.g., item being viewed)
+ * @param timestamp When the request was made
+ */
 case class RecommendationRequest(
   userId: Long,
+  contextItemId: Option[Long] = None,
   timestamp: Long = System.currentTimeMillis()
 )
 

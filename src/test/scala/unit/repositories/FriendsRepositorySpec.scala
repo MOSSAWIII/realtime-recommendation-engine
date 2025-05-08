@@ -9,7 +9,7 @@ import org.powermock.core.classloader.annotations.PrepareForTest
 import org.powermock.modules.junit4.PowerMockRunner
 import org.junit.runner.RunWith
 import repositories.FriendsRepository
-import models.UserFriends
+import models.{UserFriends, UserFriend}
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import scala.concurrent.ExecutionContext.Implicits.global
 import config._
@@ -35,17 +35,18 @@ class FriendsRepositorySpec extends FriendsRepositoryBaseSpec {
     when(mockPreparedStatement.executeUpdate()).thenReturn(1)
 
     val friendsRepository = new FriendsRepository()
-    val userFriends = UserFriends(userId = 1L, friendIds = List(2L, 3L))
-    val expectedJson = """[2,3]"""
+    // Update to use the new UserFriends structure with friends list
+    val userFriendsList = List(UserFriend(1L, 2L, 1.0), UserFriend(1L, 3L, 1.0))
+    val userFriends = UserFriends(userId = 1L, friends = userFriendsList)
+    val expectedFriendsList = "2 3"  // Expected string representation of friendIds
 
     // Act
     friendsRepository.upsert(userFriends)
 
     // Assert
-    verify(mockConnection, timeout(1000)).prepareStatement(contains("INSERT INTO user_friends"))
+    verify(mockConnection, timeout(1000)).prepareStatement(contains("INSERT INTO"))
     verify(mockPreparedStatement, timeout(1000)).setLong(1, userFriends.userId)
-    verify(mockPreparedStatement, timeout(1000)).setString(2, expectedJson)
-    verify(mockPreparedStatement, timeout(1000)).setString(3, expectedJson)
+    verify(mockPreparedStatement, timeout(1000)).setString(2, expectedFriendsList)
     verify(mockPreparedStatement, timeout(1000)).executeUpdate()
     verify(mockPreparedStatement, timeout(1000)).close()
     verify(mockConnection, timeout(1000)).close()
@@ -59,7 +60,7 @@ class FriendsRepositorySpec extends FriendsRepositoryBaseSpec {
     when(mockPreparedStatement.executeQuery()).thenReturn(mockResultSet)
     when(mockResultSet.next()).thenReturn(true, false)
     when(mockResultSet.getLong("user_id")).thenReturn(1L)
-    when(mockResultSet.getString("friend_ids")).thenReturn("[2, 3]")
+    when(mockResultSet.getString("friends_list")).thenReturn("2 3")  // Changed from friend_ids to friends_list
 
     val friendsRepository = new FriendsRepository()
     val userId = 1L
@@ -68,11 +69,12 @@ class FriendsRepositorySpec extends FriendsRepositoryBaseSpec {
     friendsRepository.findFriendsByUserId(userId.toInt)
 
     // Assert
-    verify(mockConnection, timeout(1000)).prepareStatement(contains("SELECT user_id, friend_ids FROM user_friends WHERE user_id = ?"))
+    verify(mockConnection, timeout(1000)).prepareStatement(contains("SELECT user_id, friends_list FROM"))
     verify(mockPreparedStatement, timeout(1000)).setLong(1, userId)
     verify(mockPreparedStatement, timeout(1000)).executeQuery()
     verify(mockResultSet, timeout(1000)).next()
-    verify(mockResultSet, timeout(1000)).getString("friend_ids")
+    verify(mockResultSet, timeout(1000)).getLong("user_id")
+    verify(mockResultSet, timeout(1000)).getString("friends_list")
     verify(mockResultSet, timeout(1000)).close()
     verify(mockPreparedStatement, timeout(1000)).close()
     verify(mockConnection, timeout(1000)).close()

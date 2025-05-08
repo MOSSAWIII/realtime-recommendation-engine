@@ -177,15 +177,49 @@ object RabbitMQManager {
     }
   })
   
+  // Purge all known queues for test cleanup
+  def purgeAllQueues(): Unit = {
+    val logger = LoggerFactory.getLogger(getClass)
+    logger.info("Purging all RabbitMQ queues")
+    
+    val queueNames = Seq(
+      Queues.USER_EVENTS,
+      Queues.USER_INTERACTIONS,
+      Queues.EVENT_UPDATES,
+      Queues.PARTICIPATION_UPDATES,
+      Queues.FRIENDSHIP_UPDATES,
+      Queues.INTERNAL_RECOMMENDATION_REQUESTS,
+      Queues.RECOMMENDATIONS,
+      Queues.PROCESSED_EVENTS
+    )
+    
+    val channel = createChannel("purge-all")
+    try {
+      queueNames.foreach { queueName =>
+        try {
+          logger.debug(s"Purging queue: $queueName")
+          channel.queuePurge(queueName)
+        } catch {
+          case e: Exception => 
+            logger.warn(s"Failed to purge queue $queueName: ${e.getMessage}")
+          }
+        }
+      } finally {
+        closeChannel("purge-all")
+      }
+      logger.info("Finished purging all RabbitMQ queues")
+    }
+  
   // Queue constants
   object Queues {
+    val USER_EVENTS = "user_events"
+    val PROCESSED_EVENTS = "processed_events"
+    val INTERNAL_RECOMMENDATION_REQUESTS = "internal_recommendation_requests"
+    val RECOMMENDATIONS = "recommendations"
     val USER_INTERACTIONS = "user_interactions"
     val EVENT_UPDATES = "event_updates"
     val PARTICIPATION_UPDATES = "participation_updates"
     val FRIENDSHIP_UPDATES = "friendship_updates"
-    val INTERNAL_RECOMMENDATION_REQUESTS = "internal_recommendation_requests"
-    val RECOMMENDATIONS = "recommendations"
-    val USER_EVENTS = "user_events"  // Add this missing queue constant
   }
 }
 

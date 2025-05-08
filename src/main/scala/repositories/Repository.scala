@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory
  * Implementation of the Repository interface that connects to a real database.
  * Requires an implicit ExecutionContext for asynchronous operations.
  */
-class Repository(implicit override val ec: ExecutionContext) extends RepositoryInterface {
+abstract class Repository(implicit override val ec: ExecutionContext) extends RepositoryInterface {
   
   private val logger = LoggerFactory.getLogger(getClass)
 
@@ -223,6 +223,18 @@ class Repository(implicit override val ec: ExecutionContext) extends RepositoryI
       }
     }
   }
+
+  // Default implementations for the new methods
+  override def getUserProfile(userId: Long): Future[Option[User]] = Future.successful(None)
+  override def getUserFriends(userId: Long): Future[List[UserFriend]] = Future.successful(List.empty)
+  override def getAllActiveEvents(): Future[List[Event]] = Future.successful(List.empty)
+}
+
+/**
+ * Concrete implementation of the Repository class.
+ */
+class ConcreteRepository(implicit override val ec: ExecutionContext) extends Repository {
+  // Implement abstract methods here
 }
 
 /**
@@ -237,5 +249,5 @@ object Repository {
   /**
    * Creates a new Repository with the provided ExecutionContext
    */
-  def apply(implicit ec: ExecutionContext): Repository = new Repository()
+  def apply(implicit ec: ExecutionContext): Repository = new ConcreteRepository()
 }

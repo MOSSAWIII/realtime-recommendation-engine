@@ -15,7 +15,7 @@ object Main {
     logger.info("Starting Recommendation Engine")
     
     // Initialize components
-    val repository = new Repository()
+    val repository = new ConcreteRepository()
     
     // Initialize database tables
     try {

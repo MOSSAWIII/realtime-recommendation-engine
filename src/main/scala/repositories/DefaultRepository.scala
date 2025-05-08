@@ -29,6 +29,17 @@ class DefaultRepository(implicit override val ec: ExecutionContext) extends Repo
   override def getRecentRecommendationForUser(userId: Long, timeWindow: Long): Future[Option[Recommendation]] =
     Future.successful(None)
     
+  // User methods
+  override def getUserProfile(userId: Long): Future[Option[User]] = 
+    Future.successful(None)
+  
+  override def getUserFriends(userId: Long): Future[List[UserFriend]] = 
+    Future.successful(List.empty)
+  
+  // Event methods
+  override def getAllActiveEvents(): Future[List[Event]] = 
+    Future.successful(List.empty)
+  
   // Database setup
   override def initTables(): Future[Unit] = Future.successful(())
 }

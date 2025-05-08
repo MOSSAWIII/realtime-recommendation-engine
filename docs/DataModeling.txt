@@ -1,0 +1,147 @@
+Documentation de la Modélisation des Données - Système de Recommandation en Temps Réel
+Modèles de Données Principaux
+Après avoir examiné attentivement les fichiers sources du projet, voici une documentation précise de la modélisation des données utilisée:
+
+1. Événements et Interactions
+UserEvent
+case class UserEvent(
+  userId: Long,
+  eventType: String,
+  itemId: Option[Long] = None,
+  properties: Option[Map[String, String]] = None,
+  timestamp: Long = System.currentTimeMillis()
+)
+Représente les données brutes d'une action utilisateur
+itemId est optionnel car certains événements peuvent ne pas concerner un item spécifique
+properties stocke des métadonnées additionnelles sous forme de paires clé-valeur
+ProcessedEvent
+case class ProcessedEvent(
+  id: Option[Long] = None,
+  userId: Long,
+  eventType: String,
+  itemId: Option[Long],
+  properties: Map[String, String] = Map.empty,
+  timestamp: Long,
+  processingTimestamp: Long = System.currentTimeMillis()
+)
+Version enrichie et persistée d'un UserEvent
+Ajoute un id de base de données et un processingTimestamp
+properties devient une Map non-optionnelle (valeur par défaut: Map vide)
+2. Recommandations
+RecommendationRequest
+case class RecommendationRequest(
+  userId: Long,
+  timestamp: Long = System.currentTimeMillis()
+)
+Demande simple pour générer des recommandations pour un utilisateur
+Recommendation
+case class Recommendation(
+  id: Option[Long] = None,
+  userId: Long,
+  recommendedItems: List[RecommendedItem],
+  score: Double,
+  timestamp: Long = System.currentTimeMillis()
+)
+Contient une liste d'items recommandés et un score global
+RecommendedItem
+case class RecommendedItem(
+  itemId: Long,
+  score: Double,
+  reason: String
+)
+Un item individuel dans une recommandation
+Inclut un score de pertinence et une explication
+3. Utilisateurs et Profils
+User
+case class User(
+  userId: Long,
+  name: Option[String] = None,
+  emailAddress: Option[String] = None,
+  locale: String = "en_US",
+  birthYear: Option[Int] = None,
+  gender: Option[String] = None,
+  location: Option[String] = None,
+  timezone: Option[Int] = None,
+  isGenerated: Boolean = false
+)
+Informations démographiques et de profil utilisateur
+4. Données Sociales et Événements
+Event
+case class Event(
+  id: Option[Long],
+  name: String,
+  description: Option[String] = None,
+  startTime: Long,
+  endTime: Option[Long] = None,
+  location: Option[String] = None,
+  createdBy: Long,
+  status: String = "active",
+  keywords: List[String] = List.empty,
+  keywordFrequencies: Map[String, Int] = Map.empty
+)
+Représente un événement avec métadonnées et statistiques
+EventParticipation / Participation
+case class EventParticipation(
+  id: Option[Long],
+  userId: Long,
+  eventId: Long,
+  status: String
+)
+
+case class Participation(
+  userId: Long,
+  eventId: Long,
+  status: String
+)
+Lie un utilisateur à un événement avec un statut de participation
+Friendship
+case class Friendship(
+  id: Option[Long],
+  userId1: Long,
+  userId2: Long,
+  status: String,
+  createdAt: Long
+)
+Représente une relation entre deux utilisateurs
+UserFriends
+case class UserFriends(
+  userId: Long,
+  friendIds: List[Long]
+)
+Structure optimisée pour stocker la liste d'amis d'un utilisateur
+Schéma de Base de Données
+Le système utilise deux tables principales dans PostgreSQL:
+CREATE TABLE IF NOT EXISTS processed_events (
+  id SERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  event_type VARCHAR(255) NOT NULL,
+  item_id BIGINT,
+  properties JSONB NOT NULL,
+  timestamp BIGINT NOT NULL,
+  processing_timestamp BIGINT NOT NULL
+)
+
+CREATE TABLE IF NOT EXISTS recommendations (
+  id SERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  recommended_items JSONB NOT NULL,
+  score DOUBLE PRECISION NOT NULL,
+  timestamp BIGINT NOT NULL
+)
+processed_events: Stocke les événements utilisateurs traités
+recommendations: Stocke les recommandations générées
+Utilisation du format JSONB pour les structures complexes (properties, recommended_items)
+Flux de Données
+Les événements bruts (UserEvent) arrivent via RabbitMQ
+Le Transformer les convertit en ProcessedEvent et les stocke en base de données
+Pour les événements avec un itemId, une RecommendationRequest est générée
+Le Recommender utilise l'historique des ProcessedEvent pour générer des recommandations
+Les recommandations sont enregistrées en base de données et publiées si nécessaire
+Caractéristiques Techniques
+Utilisation systématique d'Option[T] pour les champs facultatifs
+Horodatages en millisecondes (epoch time) pour tous les événements temporels
+Structures de données immuables (case classes)
+Propriétés flexibles via Map[String, String]
+Sérialisation/désérialisation JSON avec la bibliothèque circe
+Accès aux données via Repository pattern et JDBC
+Cette documentation reflète fidèlement la structure des données telle qu'implémentée dans le code source examiné.

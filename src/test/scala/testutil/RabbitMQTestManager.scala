@@ -1,199 +1,146 @@
 package testutil
 
-import com.rabbitmq.client.{Channel, Connection}
-import config.RabbitMQManager
-import com.typesafe.config.{Config, ConfigFactory}
+import com.rabbitmq.client.{Channel, Connection, ConnectionFactory}
+import config.{RabbitMQConfig, RabbitMQManager}
 import org.mockito.Mockito._
-import org.mockito.ArgumentMatchers.{anyString => mockitoAnyString}
+import org.mockito.ArgumentMatchers._
 import org.powermock.api.mockito.PowerMockito
-import org.scalatest.{BeforeAndAfterEach, BeforeAndAfterAll}
-import org.scalatest.Suite
-import scala.util.Try
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, Suite}
+import org.slf4j.LoggerFactory
+
 import scala.collection.mutable
 
 /**
- * Enhanced RabbitMQ test support that handles both mocked and real connections
- * for different test scenarios.
+ * Manages RabbitMQ connections for testing.
  */
-trait RabbitMQTestManager extends BeforeAndAfterEach with BeforeAndAfterAll { self: Suite =>
-
-  // Track test resources for proper cleanup
-  private val mockChannels = mutable.Map[String, Channel]()
-  private val realChannels = mutable.Map[String, Channel]()
-  private var realConnection: Option[Connection] = None
-  private var mockingEnabled: Boolean = true
-
-  /**
-   * Configure whether to use real or mock RabbitMQ connections
-   */
-  def useMockConnections(enabled: Boolean = true): Unit = {
-    mockingEnabled = enabled
-  }
+object RabbitMQTestManager {
+  private val logger = LoggerFactory.getLogger(getClass)
   
-  /**
-   * Set up test environment
-   */
-  override def beforeAll(): Unit = {
-    super.beforeAll()
-    if (mockingEnabled) {
-      setupMockRabbitMQ()
-    } else {
-      setupRealRabbitMQ()
-    }
-  }
+  private var connection: Option[Connection] = None
+  private val channels = scala.collection.mutable.Map.empty[String, Channel]
   
-  /**
-   * Clean up test resources
-   */
-  override def afterAll(): Unit = {
-    closeAllResources()
-    super.afterAll()
-  }
+  // Define correct queue names directly
+  private val QUEUE_USER_EVENTS = RabbitMQConfig.Queues.USER_EVENTS
+  private val QUEUE_PROCESSED_EVENTS = "processed_events" // Use string literal instead of non-existent constant
+  private val QUEUE_RECOMMENDATION_REQUESTS = RabbitMQConfig.Queues.INTERNAL_RECOMMENDATION_REQUESTS
+  private val QUEUE_RECOMMENDATIONS = RabbitMQConfig.Queues.RECOMMENDATIONS
+  private val QUEUE_USER_INTERACTIONS = RabbitMQConfig.Queues.USER_INTERACTIONS
   
-  /**
-   * Reset between tests
-   */
-  override def beforeEach(): Unit = {
-    super.beforeEach()
-    if (mockingEnabled) {
-      resetMocks()
-    }
-  }
-  
-  /**
-   * Set up mocking for RabbitMQ
-   */
-  private def setupMockRabbitMQ(): Unit = {
-    PowerMockito.mockStatic(classOf[RabbitMQManager.type])
-    
-    // Mock the createChannel/getChannel methods
-    PowerMockito.when(RabbitMQManager.getChannel(mockitoAnyString())).thenAnswer { invocation =>
-      val componentName = invocation.getArgument[String](0)
-      mockChannels.getOrElseUpdate(componentName, createMockChannel(componentName))
+  def createChannel(name: String): Channel = {
+    if (connection.isEmpty) {
+      val factory = new ConnectionFactory()
+      factory.setHost(System.getenv().getOrDefault("RABBITMQ_HOST", "localhost"))
+      factory.setPort(System.getenv().getOrDefault("RABBITMQ_PORT", "5672").toInt)
+      factory.setUsername(System.getenv().getOrDefault("RABBITMQ_USERNAME", "guest"))
+      factory.setPassword(System.getenv().getOrDefault("RABBITMQ_PASSWORD", "guest"))
+      
+      connection = Some(factory.newConnection(s"test-connection-${java.util.UUID.randomUUID()}"))
+      logger.info("Created new RabbitMQ connection for testing")
     }
     
-    PowerMockito.when(RabbitMQManager.createChannel(mockitoAnyString())).thenAnswer { invocation =>
-      val componentName = invocation.getArgument[String](0)
-      mockChannels.getOrElseUpdate(componentName, createMockChannel(componentName))
-    }
-    
-    // Mock closeChannel
-    PowerMockito.doAnswer { invocation =>
-      val componentName = invocation.getArgument[String](0)
-      mockChannels.remove(componentName)
-      null
-    }.when(RabbitMQManager, "closeChannel", mockitoAnyString())
-    
-    // Mock closeAllChannels
-    PowerMockito.doAnswer { _ =>
-      mockChannels.clear()
-      null
-    }.when(RabbitMQManager, "closeAllChannels")
+    val channel = connection.get.createChannel()
+    channels.put(name, channel)
+    channel
   }
   
-  /**
-   * Set up real RabbitMQ connection for integration tests
-   */
-  private def setupRealRabbitMQ(): Unit = {
-    import com.rabbitmq.client.ConnectionFactory
-    val factory = new ConnectionFactory()
-    factory.setHost("test-rabbitmq")
-    factory.setPort(5672)
-    factory.setUsername("guest")
-    factory.setPassword("guest")
-    
-    // Use retry pattern for container startup timing issues
-    var connected = false
-    var attempts = 0
-    val maxAttempts = 5
-    
-    while (!connected && attempts < maxAttempts) {
-      try {
-        realConnection = Some(factory.newConnection())
-        connected = true
-      } catch {
-        case e: Exception =>
-          attempts += 1
-          println(s"RabbitMQ connection attempt $attempts/$maxAttempts failed: ${e.getMessage}")
-          Thread.sleep(2000)
-      }
-    }
-    
-    if (!connected) {
-      throw new RuntimeException("Failed to connect to RabbitMQ test container")
-    }
-  }
-  
-  /**
-   * Create a real channel for integration tests
-   */
-  def createRealChannel(componentName: String): Channel = {
-    realConnection.map { conn =>
-      val channel = conn.createChannel()
-      realChannels.put(componentName, channel)
-      channel
-    }.getOrElse(throw new RuntimeException("No real RabbitMQ connection available"))
-  }
-  
-  /**
-   * Create a mock channel for unit tests
-   */
-  def createMockChannel(componentName: String): Channel = {
-    val mockChannel = PowerMockito.mock(classOf[Channel])
-    when(mockChannel.isOpen).thenReturn(true)
-    mockChannel
-  }
-  
-  /**
-   * Reset mocks between tests
-   */
-  private def resetMocks(): Unit = {
-    mockChannels.foreach { case (_, channel) => 
-      reset(channel)
-      when(channel.isOpen).thenReturn(true)
-    }
-  }
-  
-  /**
-   * Clean up all resources
-   */
-  private def closeAllResources(): Unit = {
-    // Close real channels
-    realChannels.foreach { case (_, channel) => 
+  def closeChannel(name: String): Unit = {
+    channels.get(name).foreach { channel =>
       try {
         if (channel.isOpen) {
           channel.close()
         }
       } catch {
-        case _: Exception => // Ignore errors during cleanup
+        case e: Exception => logger.warn(s"Error closing channel $name: ${e.getMessage}")
+      }
+      channels.remove(name)
+    }
+  }
+  
+  // Setup required queues for testing
+  def setupQueues(channel: Channel): Unit = {
+    logger.info("Setting up RabbitMQ test queues")
+    // Declare all the necessary queues for testing
+    channel.queueDeclare(QUEUE_USER_EVENTS, true, false, false, null)
+    channel.queueDeclare(QUEUE_PROCESSED_EVENTS, true, false, false, null)
+    channel.queueDeclare(QUEUE_RECOMMENDATION_REQUESTS, true, false, false, null)
+    channel.queueDeclare(QUEUE_RECOMMENDATIONS, true, false, false, null)
+    channel.queueDeclare(QUEUE_USER_INTERACTIONS, true, false, false, null)
+    logger.info("RabbitMQ test queues setup complete")
+  }
+  
+  // Purge all test queues
+  def purgeAllQueues(): Unit = {
+    logger.info("Purging all RabbitMQ test queues")
+    val purgeChannel = createChannel("purge-channel")
+    try {
+      purgeChannel.queuePurge(QUEUE_USER_EVENTS)
+      purgeChannel.queuePurge(QUEUE_PROCESSED_EVENTS)
+      purgeChannel.queuePurge(QUEUE_RECOMMENDATION_REQUESTS)
+      purgeChannel.queuePurge(QUEUE_RECOMMENDATIONS)
+      purgeChannel.queuePurge(QUEUE_USER_INTERACTIONS)
+      logger.info("Finished purging queues")
+    } catch {
+      case e: Exception => logger.warn(s"Error purging queues: ${e.getMessage}")
+    } finally {
+      closeChannel("purge-channel")
+    }
+  }
+  
+  // Close resources in tests
+  def close(): Unit = {
+    // Close all open channels
+    channels.foreach { case (name, channel) =>
+      try {
+        if (channel.isOpen) {
+          channel.close()
+        }
+      } catch {
+        case e: Exception => logger.warn(s"Error closing channel $name: ${e.getMessage}")
       }
     }
-    realChannels.clear()
+    channels.clear()
     
-    // Close real connection
-    realConnection.foreach { conn =>
+    // Close connection
+    connection.foreach { conn =>
       try {
         if (conn.isOpen) {
           conn.close()
         }
       } catch {
-        case _: Exception => // Ignore errors during cleanup
+        case e: Exception => logger.warn(s"Error closing connection: ${e.getMessage}")
       }
     }
-    realConnection = None
-    
-    // Clear mock tracking
-    mockChannels.clear()
-  }
-  
-  /**
-   * Verify channel was closed
-   */
-  def verifyChannelClosed(componentName: String): Unit = {
-    if (mockingEnabled) {
-      PowerMockito.verifyStatic(RabbitMQManager.getClass)
-      RabbitMQManager.closeChannel(componentName)
-    }
+    connection = None
+    logger.info("RabbitMQ test resources cleaned up")
   }
 }
+
+// Trait for easy mixing into test classes
+trait RabbitMQTestManagerTrait extends BeforeAndAfterEach with BeforeAndAfterAll { self: Suite =>
+  // Store channels created during test
+  private val mockChannels = mutable.Map[String, Channel]()
+  
+  override def beforeAll(): Unit = {
+    super.beforeAll()
+  }
+  
+  override def afterAll(): Unit = {
+    closeAllMockChannels()
+    super.afterAll()
+  }
+  
+  def createMockChannel(name: String): Channel = {
+    val channel = PowerMockito.mock(classOf[Channel])
+    when(channel.isOpen).thenReturn(true)
+    mockChannels.put(name, channel)
+    channel
+  }
+  
+  def closeAllMockChannels(): Unit = {
+    mockChannels.clear()
+  }
+}
+
+// Concrete implementation for direct use
+trait RabbitMQTestManager extends RabbitMQTestManagerTrait { self: Suite => }
 

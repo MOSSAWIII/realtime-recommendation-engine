@@ -1,31 +1,84 @@
 package config
 
 import com.typesafe.config.{Config, ConfigFactory}
-import java.sql.Connection
+import java.sql.{Connection, DriverManager}
+import org.slf4j.LoggerFactory
 import com.rabbitmq.client.Channel
 
+/**
+ * Test configuration that loads application-test.conf
+ */
 object TestConfig {
-  // Force loading of test configuration
-  lazy val config: Config = ConfigFactory.load("application-test.conf")
+  private val logger = LoggerFactory.getLogger(getClass)
   
-  // Access test-specific settings
-  val enableMocking: Boolean = config.getBoolean("test.enableMocking")
+  // Load test configuration
+  val config: Config = ConfigFactory.load("application-test.conf")
+    .withFallback(ConfigFactory.load())
+    .resolve()
+  
+  // Safe check for test mode
+  def isTestMode: Boolean = {
+    try {
+      Option(System.getProperty("test.mode"))
+        .orElse(Option(System.getenv("TEST_MODE")))
+        .map(_.toBoolean)
+        .getOrElse(true) // Default to true in test environment
+    } catch {
+      case e: Exception => 
+        logger.warn(s"Error checking test mode: ${e.getMessage}")
+        true // Default to true if there's an error
+    }
+  }
+  
+  // Check if mocking should be used in tests
+  def enableMocking: Boolean = {
+    try {
+      Option(System.getProperty("test.enableMocking"))
+        .orElse(Option(System.getenv("TEST_MOCKING")))
+        .map(_.toBoolean)
+        .getOrElse(config.getBoolean("test.enableMocking"))
+    } catch {
+      case e: Exception => 
+        logger.warn(s"Error checking mocking flag: ${e.getMessage}")
+        true // Default to true for tests
+    }
+  }
 }
 
+/**
+ * DatabaseConfig for tests with proper error handling
+ */
 object DatabaseConfig {
+  private val logger = LoggerFactory.getLogger(getClass)
+  
   def getConnection: Connection = {
-    // For tests, return a connection based on test configuration
-    val testMode = TestConfig.config.getBoolean("test.enableMocking")
-    if (testMode) {
-      // Return a mock connection for unit tests
+    if (TestConfig.enableMocking) {
+      // For unit tests with mocking
       import org.mockito.Mockito.mock
       mock(classOf[Connection])
     } else {
-      // Return a real connection for integration tests
-      val url = TestConfig.config.getString("database.url")
-      val user = TestConfig.config.getString("database.user")
-      val password = TestConfig.config.getString("database.password")
-      java.sql.DriverManager.getConnection(url, user, password)
+      // For integration tests with real DB
+      try {
+        val config = TestConfig.config
+        
+        // Make sure we have the database config section
+        if (!config.hasPath("database")) {
+          throw new RuntimeException("Missing 'database' section in test configuration")
+        }
+        
+        val dbConfig = config.getConfig("database")
+        val url = dbConfig.getString("url")
+        val user = dbConfig.getString("user")
+        val password = dbConfig.getString("password")
+        
+        logger.info(s"Connecting to test database at $url")
+        DriverManager.getConnection(url, user, password)
+      } catch {
+        case e: Exception =>
+          val errorMessage = s"Failed to connect to database: ${e.getMessage}"
+          logger.error(errorMessage, e)
+          throw new RuntimeException(errorMessage, e)
+      }
     }
   }
 }
@@ -33,7 +86,7 @@ object DatabaseConfig {
 object RabbitMQConfig {
   def createChannel(): Channel = {
     // For tests, return a channel based on test configuration
-    val testMode = TestConfig.config.getBoolean("test.enableMocking")
+    val testMode = TestConfig.enableMocking
     if (testMode) {
       // Return a mock channel for unit tests
       import org.mockito.Mockito.mock

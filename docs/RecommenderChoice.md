@@ -28,27 +28,35 @@ Pour une description plus détaillée des cas d'usage et des scénarios utilisat
 
 ## **2\. ANALYSE DU MODÈLE DE DONNÉES**
 
-Le modèle de données actuel présente une structure riche et relationnelle particulièrement adaptée à l'approche de recommandation contextuelle. Cette architecture permet d'exploiter simultanément les données utilisateur, les caractéristiques des événements et les interactions sociales.
+Notre système de recommandation s'appuie sur un modèle de données orienté événements, structuré pour optimiser le traitement en temps réel et la flexibilité des recommandations. Une documentation technique détaillée du modèle est disponible [ici](https://docs.google.com/document/d/1HaCQ0cx3r4NOgqDsadwOZa4Ot48QsaE6UHgi6hRYbCQ/edit?tab=t.0#heading=h.3ho9yfpmyyf3).
 
-### **2.1 Tables principales et leurs relations**
+### **2.1 Structure orientée événements**
 
-La table **UTILISATEUR** stocke les informations démographiques et contextuelles (locale, birthyear, gender, location, timezone) essentielles pour la personnalisation des recommandations. Ces données permettent une segmentation fine et une adaptation contextuelle même pour de nouveaux utilisateurs.
+Le modèle repose sur une distinction claire entre données brutes (`UserEvent`) et données transformées (`ProcessedEvent`), permettant un traitement progressif sans perte d'information. Les événements capturent toutes les interactions utilisateurs avec horodatage précis, essentiels pour les algorithmes sensibles à la récence.
 
-Les événements sont représentés dans la table **EVENEMENT** avec une richesse remarquable en métadonnées géographiques (city, state, country, lat, lng) et temporelles (start\_time). L'aspect unique de cette table réside dans ses vecteurs de caractéristiques (c\_1 à c\_100) qui encodent les attributs sémantiques des événements, permettant des calculs de similarité sophistiqués.
+### **2.2 Modèles principaux et leurs relations**
 
-Les interactions entre utilisateurs et événements sont capturées par **PARTICIPATION\_DETAIL** qui enregistre chaque statut de participation (accepté, intéressé, décliné). Cette table constitue la source principale de signaux explicites d'intérêt des utilisateurs.
+Le système organise ses données autour de quatre catégories principales:
 
-Le graphe social est modélisé via **RESEAU\_AMIS** qui utilise une structure JSONB pour stocker efficacement les listes d'amis. Cette dimension sociale enrichit considérablement le contexte de recommandation en permettant d'identifier les affinités communes et tendances au sein des réseaux d'amis.
+1. **Événements et Interactions**: Capture des actions utilisateurs (`UserEvent`, `ProcessedEvent`) avec métadonnées contextuelles, formant la base des signaux comportementaux pour les recommandations.
 
-La table **PARTICIPATION\_EVENEMENT** agrège les différents statuts de participation (yes\_list, maybe\_list, invited\_list, no\_list) pour chaque événement, offrant une vue consolidée utile pour l'analyse de popularité.
+2. **Recommandations**: Structures (`RecommendationRequest`, `Recommendation`, `RecommendedItem`) permettant la génération, l'évaluation et la distribution des suggestions personnalisées.
 
-Le comportement en temps réel est capturé par **processed\_events**, table qui enregistre chaque interaction utilisateur (clics, vues, recherches) avec leurs propriétés contextuelles et horodatages. Cette source de données dynamique permet au système de s'adapter immédiatement aux centres d'intérêt actuels.
+3. **Utilisateurs et Profils**: Informations démographiques et préférentielles (`User`) enrichissant le contexte de personnalisation, particulièrement utiles pour résoudre le démarrage à froid.
 
-Enfin, **recommendations** stocke les suggestions générées avec leurs scores, permettant l'analyse de performance et l'audit du système.
+4. **Données Sociales**: Modélisation du graphe social (`Friendship`, `UserFriends`) et des interactions contextuelles (`Event`, `EventParticipation`), offrant une dimension collective essentielle aux recommandations d'événements sociaux.
+
+### **2.3 Persistance et flux de données**
+
+Le système utilise PostgreSQL avec deux tables principales (`processed_events`, `recommendations`), exploitant le format JSONB pour les structures complexes. L'architecture orientée messages (RabbitMQ) garantit une circulation fluide des données entre les composants, depuis la capture des événements bruts jusqu'à la distribution des recommandations.
+
+Cette modélisation présente des avantages significatifs pour notre approche de recommandation:
+- Adaptabilité immédiate aux comportements changeants (via événements horodatés)
+- Flexibilité technique (propriétés extensibles via Map et JSONB)
+- Traçabilité complète du processus de recommandation
+- Support natif du contexte social, essentiel pour notre domaine d'application
 
 ## **3\. APPROCHE DE RECOMMANDATION CHOISIE**
-
-Comme détaillé dans notre [tableau comparatif des approches de recommandation](https://docs.google.com/document/d/1FZADXEwYHBmso4YqB8UfffXYv1fRRe5-wTMIxRcQasQ/edit?tab=t.0#heading=h.mgn5on71f58e), plusieurs stratégies ont été évaluées pour notre système. Après analyse des avantages et inconvénients de chaque méthode, nous avons sélectionné l'approche décrite ci-dessous.
 
 ### **3.1 "Approche hybride avec pondération contextuelle dynamique"**
 

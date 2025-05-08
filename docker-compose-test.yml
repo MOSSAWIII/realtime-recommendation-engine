@@ -41,6 +41,7 @@ services:
       dockerfile: Dockerfile.test
     environment:
       - TEST_MODE=true
+      - TEST_MOCKING=false  # For integration tests with real DB
       - DB_HOST=test-db
       - DB_PORT=5432
       - DB_NAME=test_recommendation_engine
