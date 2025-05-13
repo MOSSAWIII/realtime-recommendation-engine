@@ -1,23 +1,38 @@
-graph TB
-    %% Sources de données
+flowchart TB
+    %% Organisation principale: flux de haut en bas avec composants connexes regroupés horizontalement
+    
+    %% Sources de données (en haut)
     UserApp([Application Client]) -->|"Génère"| UE([UserEvent])
     UE ==>|"JSON"| Q_USER["RabbitMQ: USER_EVENTS<br>durable=true"]
     
-    %% Pipeline principal (avec référence aux classes)
+    %% Pipeline principal réorganisé pour flux vertical clair
     Q_USER -->|"Consomme messages<br>basicAck=manual"| SC[StreamingConsumer]
     SC ==>|"UserEvent"| TR[Transformer]
     TR ==>|"ProcessedEvent<br>storeProcessedEvent()"| REP[Repository]
+    
+    %% Accès aux données (placé à côté du repository)
+    REP <-->|"JDBC + PreparedStatement<br>HikariCP connection pool"| PG[(PostgreSQL)]
+    
+    %% Flux asynchrone séparé visuellement pour éviter les croisements
     TR -.->|"Si itemId présent<br>publishRecommendationRequest()"| RR([RecommendationRequest]) 
     RR -.->|"JSON via RabbitMQ"| Q_INT["INTERNAL_RECOMMENDATION_REQUESTS"]
     Q_INT -->|"Consomme"| REC[Recommender]
     
-    %% Accès aux données
-    REP <-->|"JDBC + PreparedStatement<br>HikariCP connection pool"| PG[(PostgreSQL)]
+    %% Repositionnement du flux de recommendations
+    REC -->|"storeRecommendation(recommendation)"| REP
+    REC ==>|"Recommendation JSON"| Q_REC["RabbitMQ: RECOMMENDATIONS"]
     
-    %% Architecture Repository avec relations hiérarchiques claires
+    %% Accès du recommender aux données (placés plus proprement)
+    REC -->|"getProcessedEventsForUser(userId, limit)"| REP
+    REC -->|"getUserProfile(userId)"| UREPO[UserRepository]
+    REC -->|"getUserFriends(userId)"| FREPO[FriendsRepository]
+    REC -->|"getAllActiveEvents()"| EREPO[EventRepository]
+    
+    %% Architecture Repository regroupée avec positionnement optimisé
     subgraph "Architecture Repository"
-      BASEREPO[BaseRepository<br>méthodes communes]
+      direction TB
       REPOINTERFACE[RepositoryInterface<br>définit contrat]
+      BASEREPO[BaseRepository<br>méthodes communes]
       REPO[Repository<br>implémentation principale]
       CONCRETEREPO[ConcreteRepository<br>extends Repository]
       
@@ -26,71 +41,69 @@ graph TB
       REPO -->|"extends"| CONCRETEREPO
     end
     
-    %% Repositories spécifiques avec leurs relations
-    REPO -->|"provides methods for"| UREPO[UserRepository]
-    REPO -->|"provides methods for"| EREPO[EventRepository]
+    %% Repositionnement des repositories spécifiques pour minimiser les croisements
+    REPO -->|"provides methods for"| UREPO
+    REPO -->|"provides methods for"| EREPO
     REPO -->|"provides methods for"| PREPO[ParticipationRepository] 
-    REPO -->|"provides methods for"| FREPO[FriendsRepository]
+    REPO -->|"provides methods for"| FREPO
     
-    %% Mécanismes de résilience - simplifié et plus clair
+    %% Mécanismes de résilience - repositionnés pour réduire les croisements
     subgraph "Mécanismes de résilience"
+      direction TB
       RETRY[Retry avec backoff<br>maxRetries=3]
       ACK["Acknowledge manuel<br>basicAck avec deliveryTag"]
       ERROR[Try/Catch + Logging<br>LoggerFactory.getLogger]
       RETRY_LOGIC[RabbitMQManager.connect<br>avec backoff exponentiel]
       
+      RETRY_LOGIC -->|"gère reconnexions"| RETRY
       BASEREPO -->|"implémente"| RETRY
       BASEREPO -->|"implémente"| ERROR
-      SC -->|"utilise"| ACK
-      REC -->|"utilise"| ACK
-      RETRY_LOGIC -->|"gère reconnexions"| RETRY
     end
     
-    %% Données de référence avec types de données spécifiés
+    %% Liens de résilience vers composants principaux - réorganisés pour clarté
+    SC -->|"utilise"| ACK
+    REC -->|"utilise"| ACK
+    
+    %% Données de référence avec meilleur positionnement
     Q_REF_U["RabbitMQ: USER_INTERACTIONS"] -.->|"User JSON"| CM[ConsumerManager]
     Q_REF_E["RabbitMQ: EVENT_UPDATES"] -.->|"Event JSON"| CM
     Q_REF_P["RabbitMQ: PARTICIPATION_UPDATES"] -.->|"Participation JSON"| CM
     Q_REF_F["RabbitMQ: FRIENDSHIP_UPDATES"] -.->|"Friendship JSON"| CM
     
-    %% Flux de données vers repositories spécifiques
+    %% Flux vers repositories spécifiques - placement optimisé
     CM -->|"upsert(user)"| UREPO
     CM -->|"upsert(event)"| EREPO
     CM -->|"upsert(participation)"| PREPO
     CM -->|"upsert(friendship)"| FREPO
     
-    %% Flux de données détaillé du Recommender vers repositories
-    REC -->|"getProcessedEventsForUser(userId, limit)"| REP
-    REC -->|"getUserProfile(userId)"| UREPO
-    REC -->|"getUserFriends(userId)"| FREPO
-    REC -->|"getAllActiveEvents()"| EREPO
-    REC -->|"storeRecommendation(recommendation)"| REP
-    REC ==>|"Recommendation JSON"| Q_REC["RabbitMQ: RECOMMENDATIONS"]
-    
-    %% Algorithme de recommandation avec pondérations exactes du code
+    %% Algorithme de recommandation repositionné pour éviter les croisements
     subgraph "Algorithme de recommandation"
+      direction TB
       BEHAVIOR[Comportement actuel<br>CurrentBehaviorWeight=0.6]
       CONTEXT[Contexte social & géo<br>ContextualWeight=0.3]
       HISTORY[Historique<br>HistoricalWeight=0.1]
+      SCORE[Score final]
       
-      BEHAVIOR ==>|"Fréquence d'interaction<br>recencyScore+frequencyScore"| SCORE[Score final]
+      BEHAVIOR ==>|"Fréquence d'interaction<br>recencyScore+frequencyScore"| SCORE
       CONTEXT ==>|"Proximité & amis<br>isSameLocation() + participatingFriends"| SCORE
       HISTORY ==>|"categoryMatchCount*15.0"| SCORE
     end
     
-    %% Structure des données avec champs exacts depuis le code
+    %% Structure des données - connexions simplifiées
     subgraph "Modèles de données"
+        direction LR
         PE["ProcessedEvent<br>id: Option[Long], userId: Long,<br>eventType: String, itemId: Option[Long],<br>properties: Map[String, String],<br>timestamp: Long, processingTimestamp: Long"]
-        RI["RecommendedItem<br>itemId: Long, score: Double, reason: String"]
         RC["Recommendation<br>id: Option[Long], userId: Long,<br>recommendedItems: List[RecommendedItem],<br>score: Double, timestamp: Long"]
+        RI["RecommendedItem<br>itemId: Long, score: Double, reason: String"]
     end
     
-    %% Relations des données
+    %% Relations des données avec meilleur routage
     PE -.->|"Transforme en"| RC
     RC o-->|"contains"| RI
     TR -->|"Crée"| PE
     REC -->|"Génère"| RC
     
-    %% Cycle de vie des données amélioré
+    %% Cycle de vie des données - repositionné pour clarté
     subgraph "Cycle de vie des données"
       direction LR
       CAPTURE[Capture<br>UserEvent] ==>|"StreamingConsumer"| TRANSFORM[Transformation<br>ProcessedEvent]
@@ -99,8 +112,9 @@ graph TB
       USE ==>|"RabbitMQ"| PUBLISH[Publication<br>affichage]
     end
     
-    %% Légende améliorée
+    %% Légende - déplacée au bas pour ne pas interférer
     subgraph "Légende"
+      direction LR
       COMPONENT[Composant logiciel]
       QUEUE[(Queue RabbitMQ)]
       DATABASE[(Base de données)]
@@ -110,14 +124,14 @@ graph TB
       DATA_FLOW==>|"Flux de données principal"| ENDPOINT
     end
     
-    %% Styles - conservés et étendus
+    %% Styles - conservés
     classDef component fill:#f9a825,stroke:#f57f17,stroke-width:1px,color:#000
     classDef queue fill:#81d4fa,stroke:#0288d1,stroke-width:1px,color:#000
     classDef data fill:#c5e1a5,stroke:#558b2f,stroke-width:1px,color:#000
     classDef store fill:#ce93d8,stroke:#7b1fa2,stroke-width:1px,color:#000
     classDef model fill:#fff59d,stroke:#fbc02d,stroke-width:1px,color:#000
 
-    %% Appliquer les styles
+    %% Application des styles
     class SC,TR,REC,CM component
     class Q_USER,Q_INT,Q_REC,Q_REF_U,Q_REF_E,Q_REF_P,Q_REF_F queue
     class PE,RI,RC,UE,RR data

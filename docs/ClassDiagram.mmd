@@ -1,0 +1,317 @@
+classDiagram
+    direction TB
+    
+    %% Organisation stratégique avec direction et sous-graphes explicites
+    
+    %% Configuration en haut à gauche
+    class DatabaseConfig {
+        <<object>>
+        -HikariDataSource dataSource
+        +getConnection() Connection
+        +closeConnection() void
+    }
+    
+    class RabbitMQConfig {
+        <<object>>
+        -String host
+        -int port
+        -String username
+        -String password
+        +createConnection() Connection
+        +closeConnection() void
+    }
+    
+    class RabbitMQManager {
+        <<object>>
+        -Connection connection
+        -Map~String, Channel~ channels
+        +createChannel(name: String) Channel
+        +closeChannel(name: String) void
+        +purgeAllQueues() void
+    }
+
+    class Queues {
+        <<object>>
+        +String USER_EVENTS
+        +String PROCESSED_EVENTS
+        +String INTERNAL_RECOMMENDATION_REQUESTS
+        +String RECOMMENDATIONS
+        +String USER_INTERACTIONS
+        +String EVENT_UPDATES
+        +String PARTICIPATION_UPDATES
+        +String FRIENDSHIP_UPDATES
+    }
+    
+    %% Point d'entrée de l'application au centre supérieur
+    class Main {
+        <<object>>
+        +main(args: Array[String]) void
+    }
+    
+    %% Flux de processus principal (gauche à droite)
+    class StreamingConsumer {
+        -Repository repository
+        -Transformer transformer
+        -Channel channel
+        +start() void
+        -setupProcessEventsQueue() void
+        -consumeUserEvents() void
+    }
+    
+    class Transformer {
+        -Repository repository
+        -Channel channel
+        +processEvent(event: UserEvent) Future[ProcessedEvent]
+        -publishRecommendationRequest(processedEvent: ProcessedEvent) void
+    }
+    
+    class Recommender {
+        -Repository repository
+        -Channel channel
+        +start() void
+        -setupRecommendationQueue() void
+        -consumeRecommendationRequests() void
+        -generateRecommendations(userId: Long) Future[Recommendation]
+    }
+    
+    class ConsumerManager {
+        -UserRepository userRepo
+        -EventRepository eventRepo
+        -ParticipationRepository participationRepo
+        -FriendsRepository friendsRepo
+        -Map[String, Channel] channels
+        +start() void
+        -setupUserInteractionsConsumer() void
+        -setupEventUpdatesConsumer() void
+        -setupParticipationUpdatesConsumer() void
+        -setupFriendshipUpdatesConsumer() void
+    }
+    
+    class DataLoader {
+        -UserRepository userRepo
+        -EventRepository eventRepo
+        -ParticipationRepository participationRepo
+        -FriendsRepository friendsRepo
+        -Option[Channel] userChannel
+        -Option[Channel] eventChannel
+        -Option[Channel] participationChannel
+        -Option[Channel] friendshipChannel
+        +loadAllAsync() Future[Unit]
+        +close() void
+    }
+    
+    %% Modèles de données (au milieu pour faciliter les connexions)
+    class UserEvent {
+        +Long userId
+        +String eventType
+        +Option[Long] itemId
+        +Option[Map[String, String]] properties
+        +Long timestamp
+    }
+    
+    class ProcessedEvent {
+        +Option[Long] id
+        +Long userId
+        +String eventType
+        +Option[Long] itemId
+        +Map[String, String] properties
+        +Long timestamp
+        +Long processingTimestamp
+    }
+    
+    class Recommendation {
+        +Option[Long] id
+        +Long userId
+        +List[RecommendedItem] recommendedItems
+        +Double score
+        +Long timestamp
+    }
+    
+    class RecommendedItem {
+        +Long itemId
+        +Double score
+        +String reason
+    }
+    
+    %% Modèles d'entités de données (regroupés)
+    class User {
+        +Long userId
+        +Option[String] name
+        +Option[String] emailAddress
+        +String locale
+        +Option[Int] birthYear
+        +Option[String] gender
+        +Option[String] location
+        +Option[Int] timezone
+        +Boolean isGenerated
+    }
+    
+    class Event {
+        +Option[Long] id
+        +String name
+        +Option[String] description
+        +Long startTime
+        +Option[Long] endTime
+        +Option[String] location
+        +Long createdBy
+        +String status
+        +List[String] keywords
+        +Map[String, Int] keywordFrequencies
+        +Set[Long] participants
+    }
+    
+    class Participation {
+        +Long userId
+        +Long eventId
+        +String status
+    }
+    
+    class EventParticipation {
+        +Option[Long] id
+        +Long userId
+        +Long eventId
+        +String status
+    }
+    
+    class Friendship {
+        +Option[Long] id
+        +Long userId1
+        +Long userId2
+        +String status
+        +Long createdAt
+    }
+    
+    class UserFriend {
+        +Long userId
+        +Long friendId
+        +String status
+    }
+    
+    class UserInteraction {
+        +Option[Long] id
+        +Long userId
+        +Long itemId
+        +String interactionType
+        +Long timestamp
+        +Option[Map[String, String]] metadata
+    }
+    
+    %% Structure repository (hiérarchie claire de haut en bas)
+    class RepositoryInterface {
+        <<interface>>
+        +storeProcessedEvent(event: ProcessedEvent) Future[ProcessedEvent]
+        +getProcessedEventsForUser(userId: Long, limit: Int) Future[List[ProcessedEvent]]
+        +getRecentProcessedEvents(limit: Int) Future[Seq[ProcessedEvent]]
+        +storeRecommendation(recommendation: Recommendation) Future[Recommendation]
+        +getRecommendationForUser(userId: Long) Future[Option[Recommendation]]
+        +getRecentRecommendationForUser(userId: Long, timeWindow: Long) Future[Option[Recommendation]]
+        +getUserProfile(userId: Long) Future[Option[User]]
+        +getUserFriends(userId: Long) Future[List[UserFriend]]
+        +getAllActiveEvents() Future[List[Event]]
+        +initTables() Future[Unit]
+    }
+    
+    class BaseRepository {
+        <<abstract>>
+        #getConnection() Connection
+        #executeWithRetry(action: () => T) T
+        #prepareStatement(sql: String) PreparedStatement
+        #executeQuery(query: String) ResultSet
+        #executeUpdate(query: String) Int
+    }
+    
+    class Repository {
+        <<abstract>>
+        +storeProcessedEvent(event: ProcessedEvent) Future[ProcessedEvent]
+        +getProcessedEventsForUser(userId: Long, limit: Int) Future[List[ProcessedEvent]]
+        +getRecentProcessedEvents(limit: Int) Future[Seq[ProcessedEvent]]
+        +storeRecommendation(recommendation: Recommendation) Future[Recommendation]
+        +getRecommendationForUser(userId: Long) Future[Option[Recommendation]]
+    }
+    
+    %% Repositories spécifiques (disposés horizontalement)
+    class UserRepository {
+        +findById(userId: Long) Future[Option[User]]
+        +findAll() Future[List[User]]
+        +upsert(user: User) Future[User]
+        +delete(userId: Long) Future[Boolean]
+    }
+    
+    class EventRepository {
+        +findById(eventId: Long) Future[Option[Event]]
+        +findAll() Future[List[Event]]
+        +findFutureEvents() Future[List[Event]]
+        +upsert(event: Event) Future[Event]
+        +delete(eventId: Long) Future[Boolean]
+    }
+    
+    class ParticipationRepository {
+        +findByUserAndEvent(userId: Long, eventId: Long) Future[Option[Participation]]
+        +findByUser(userId: Long) Future[List[Participation]]
+        +findByEvent(eventId: Long) Future[List[Participation]]
+        +findAll() Future[List[Participation]]
+        +upsert(participation: Participation) Future[Participation]
+    }
+    
+    class FriendsRepository {
+        +findByUser(userId: Long) Future[List[UserFriend]]
+        +findAll() Future[List[UserFriend]]
+        +upsert(friendship: Friendship) Future[UserFriend]
+    }
+    
+    %% Relations de configuration
+    RabbitMQManager --> Queues : uses
+    Repository --> DatabaseConfig : uses
+    
+    %% Relations d'instanciation principales
+    Main --> StreamingConsumer : creates
+    Main --> Transformer : creates
+    Main --> Recommender : creates
+    Main --> ConsumerManager : creates
+    Main --> Repository : creates
+    
+    %% Relations de composants principaux  
+    StreamingConsumer --> Transformer : uses
+    StreamingConsumer --> Repository : uses
+    StreamingConsumer --> RabbitMQManager : uses
+    
+    Transformer --> Repository : uses
+    Transformer --> RabbitMQManager : uses
+    Transformer --> ProcessedEvent : creates
+    
+    Recommender --> Repository : uses
+    Recommender --> RabbitMQManager : uses
+    Recommender --> Recommendation : creates
+    
+    ConsumerManager --> UserRepository : uses
+    ConsumerManager --> EventRepository : uses
+    ConsumerManager --> ParticipationRepository : uses
+    ConsumerManager --> FriendsRepository : uses
+    ConsumerManager --> RabbitMQManager : uses
+    
+    %% Relations de repository (hiérarchie)
+    RepositoryInterface <|-- Repository : implements
+    BaseRepository <|-- Repository : extends
+    Repository <|-- UserRepository : extends
+    Repository <|-- EventRepository : extends
+    Repository <|-- ParticipationRepository : extends
+    Repository <|-- FriendsRepository : extends
+    
+    %% Relations de chargement de données
+    DataLoader --> UserRepository : uses
+    DataLoader --> EventRepository : uses
+    DataLoader --> ParticipationRepository : uses
+    DataLoader --> FriendsRepository : uses
+    DataLoader --> RabbitMQManager : uses
+    
+    %% Relations entre modèles de données
+    UserEvent --> ProcessedEvent : transformed to
+    ProcessedEvent --> Recommendation : used to generate
+    Recommendation o-- RecommendedItem : contains
+    
+    %% Relations spécifiques repositories-modèles
+    UserRepository --> User : manages
+    EventRepository --> Event : manages
+    ParticipationRepository --> Participation : manages
+    FriendsRepository --> UserFriend : manages
+    FriendsRepository --> Friendship : transforms
