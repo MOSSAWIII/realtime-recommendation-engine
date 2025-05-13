@@ -63,8 +63,8 @@ function setup_containers() {
   echo "Starting test containers..."
   docker-compose -f docker-compose-test.yml up -d test-db test-rabbitmq
 
-  echo "Waiting for containers to initialize (45 seconds)..."
-  sleep 45
+  echo "Waiting for containers to initialize (20 seconds)..."
+  sleep 20
 }
 
 function setup_rabbitmq_queues() {
