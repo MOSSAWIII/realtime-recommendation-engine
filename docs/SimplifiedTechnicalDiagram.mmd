@@ -1,103 +1,39 @@
-flowchart TB
-    %% Organisation en couches avec flux minimal
+flowchart TD
+    Client[Application Client]
     
-    %% COUCHE CLIENT
-    subgraph "Interface Utilisateur"
-        CLIENT([Client Application])
+    subgraph RMQ[RabbitMQ Message Broker]
+        UAExch["user_actions_exchange (topic)"]
+        HDQueue[historical_data_queue]
+        PEQueue[processed_events_queue]
+        RecQueue[recommendations_queue]
     end
     
-    %% COUCHE MESSAGERIE (consolidée avec gestion lifecycle)
-    subgraph "Message Broker (RabbitMQ)"
-        QUEUES[(RabbitMQManager:<br>
-        <i>Gestion cycle de vie connections/channels</i><br>
-        USER_EVENTS → StreamingConsumer<br>
-        PROCESSED_EVENTS ← Transformer<br>
-        INTERNAL_REQUESTS → Recommender<br>
-        RECOMMENDATIONS ← Recommender<br>
-        USER_INTERACTIONS → ConsumerManager<br>
-        EVENT_UPDATES → ConsumerManager<br>
-        PARTICIPATION_UPDATES → ConsumerManager<br>
-        FRIENDSHIP_UPDATES → ConsumerManager)]
-    end
+    Transform[Transformer]
+    Recomm[Recommender]
+    DM[DataManager]
+    DB[(PostgreSQL)]
     
-    %% COUCHE TRAITEMENT (tous les composants mentionnés)
-    subgraph "Processing Pipeline"
-        SC[StreamingConsumer]
-        TR[Transformer]
-        REC[Recommender]
-        CM[ConsumerManager]
-        DL[DataLoader:<br><i>Initial data loading<br>Update consumers</i>]
-    end
+    %% Relations
+    Client -->|Comportement et interactions| UAExch
+    Client -->|Données| HDQueue
     
-    %% COUCHE DONNÉES (tous les repositories)
-    subgraph "Data Layer"
-        subgraph "Repositories"
-            REPO[Repository]
-            UREPO[UserRepository]
-            EREPO[EventRepository]
-            PREPO[ParticipationRepository]
-            FREPO[FriendsRepository]
-            IREPO[UserInteractionRepository]
-        end
-        DB[(PostgreSQL)]
-    end
+    UAExch --> Transform
+    Transform --> PEQueue
+    PEQueue --> Recomm
+    Recomm --> RecQueue
+    RecQueue --> Client
     
-    %% COUCHE MODÈLES (complet mais compact)
-    subgraph "Core Models"
-        MODELS[User, Event, UserEvent,<br>ProcessedEvent, Recommendation,<br>Participation, Friendship, UserInteraction]
-    end
+    HDQueue --> DM
+    DM <--> DB
+    DM -->|Données Historique| Recomm
+    DB --> Transform
     
-    %% ALGORITHMES (simplifié)
-    subgraph "Recommendation Engine"
-        ALG["Algorithme de recommandation:
-        Comportement actuel (60%)
-        Contexte social (30%)
-        Historique utilisateur (10%)"]
-    end
+    classDef broker fill:#e1f5fe,stroke:#01579b
+    classDef queue fill:#b3e5fc,stroke:#0288d1
+    classDef component fill:#fff9c4,stroke:#f57f17
+    classDef database fill:#e8f5e9,stroke:#2e7d32
     
-    %% FLUX PRINCIPAL UNIQUEMENT - Lignes épaisses
-    CLIENT ==> QUEUES
-    QUEUES ==> SC
-    SC ==> TR
-    TR ==> REPO
-    TR ==> |PROCESSED_EVENTS| QUEUES
-    QUEUES -.-> REC
-    REC --> ALG
-    REC ==> QUEUES
-    QUEUES ==> CLIENT
-    
-    %% CONNEXIONS ESSENTIELLES À LA BD
-    REPO --- DB
-    
-    %% HIÉRARCHIE DES REPOSITORIES (une seule flèche pour montrer la relation)
-    REPO --- UREPO & EREPO & PREPO & FREPO & IREPO
-    
-    %% CM POUR DONNÉES DE RÉFÉRENCE - relation bidirectionnelle
-    CM <==> |Reference Data| QUEUES
-    
-    %% DATALOADER CONNECTIONS (ADDED)
-    DL <==> |Initial Loading| REPO
-    DL <--- |Entity Updates| QUEUES
-    
-    %% STYLES DISTINCTS
-    classDef client fill:#f9a825,stroke:#f57f17,color:#000,stroke-width:2px
-    classDef broker fill:#81d4fa,stroke:#0288d1,color:#000,stroke-width:1px
-    classDef service fill:#ffcc80,stroke:#ef6c00,color:#000,stroke-width:1px
-    classDef data fill:#ce93d8,stroke:#7b1fa2,color:#000,stroke-width:1px
-    classDef model fill:#A5D6A7,stroke:#2E7D32,color:#000,stroke-width:1px
-    
-    %% APPLICATION DES STYLES
-    class CLIENT client
-    class QUEUES broker
-    class SC,TR,REC,CM,DL service
-    class REPO,UREPO,EREPO,PREPO,FREPO,IREPO,DB data
-    class MODELS,ALG model
-    
-    %% FLUX PRINCIPAL EN ÉVIDENCE
-    linkStyle 0,1,2,3,7,8 stroke:#558b2f,stroke-width:3px
-    linkStyle 4 stroke:#f06292,stroke-width:2px
-    linkStyle 5,6 stroke:#666,stroke-width:1px,stroke-dasharray: 5 5
-    
-    %% DATALOADER LINKS STYLE
-    linkStyle 11 stroke:#9C27B0,stroke-width:2px
-    linkStyle 12 stroke:#E91E63,stroke-width:2px
+    class RMQ broker
+    class UAExch,HDQueue,PEQueue,RecQueue queue
+    class Transform,Recomm,DM,Client component
+    class DB database
