@@ -28,19 +28,19 @@ function show_help() {
   echo "Run integration tests with Docker container dependencies."
   echo ""
   echo "Available TEST_TYPE options:"
-  echo "  transformation     - Run StreamingTransformerIntegrationSpec"
-  echo "  streaming         - Run StreamingTransformerIntegrationSpec"
+  echo "  streaming         - Run StreamingTransformerIntegrationSpec (refactorisé)"
   echo "  pipeline          - Run PipelineIntegrationSpec and CompletePipelineSpec"
   echo "  messaging         - Run TransformerRecommenderMessagingSpec"
   echo "  recommendation    - Run TransformerRecommenderIntegrationSpec"
-  echo "  contextual        - Run ContextualRecommendationSpec (Phase 2)"
+  echo "  data-manager      - Run DataManagerIntegrationSpec (nouveau)"
+  echo "  contextual        - Run ContextualRecommendationSpec"
   echo "  specific:[class]  - Run a specific integration test class"
-  echo "                      Example: ./run-tests.sh specific:integration.recommendation.ContextualRecommendationSpec"
+  echo "                      Example: ./run-tests.sh specific:integration.streaming.StreamingTransformerIntegrationSpec"
   echo "  all               - Run all integration tests"
   echo ""
   echo "Add 'debug' as second parameter to enable verbose debugging"
   echo ""
-  echo "Default if no option provided: transformation"
+  echo "Default if no option provided: streaming"
   exit 0
 }
 
@@ -77,16 +77,21 @@ function setup_rabbitmq_queues() {
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqctl add_vhost test || true
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqctl set_permissions -p test guest ".*" ".*" ".*" || true
   
-  # Create required queues
+  # Create the required queues from the simplified diagram
   echo "Creating test queues in RabbitMQ..."
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=user_events durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=processed_events durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=internal_recommendation_requests durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=recommendations durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=user_interactions durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=event_updates durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=participation_updates durable=true || true
-  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=friendship_updates durable=true || true
+  
+  # Créer l'exchange principal selon le diagramme technique
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare exchange name=user_actions_exchange type=topic durable=true || true
+  
+  # Créer les queues selon le diagramme technique 
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=processed_events_queue durable=true || true
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=recommendations_queue durable=true || true
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=historical_data_queue durable=true || true
+  
+  # Créer les bindings avec les routing keys selon l'architecture
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=processed_events_queue routing_key="event.processed.#" || true
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=recommendations_queue routing_key="recommendation.result.#" || true
+  docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=historical_data_queue routing_key="historical.data.#" || true
   
   print_success "RabbitMQ setup completed"
 }
@@ -118,7 +123,7 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
 fi
 
 # Parse command line arguments
-TEST_TYPE=${1:-"transformation"}
+TEST_TYPE=${1:-"streaming"}
 DEBUG_MODE=${2:-""}
 
 # Process debug flag
@@ -138,10 +143,8 @@ setup_rabbitmq_queues
 
 # Run tests based on selected type
 case $TEST_TYPE in
-  "transformation")
-    run_test "integration.transformation.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
-    ;;
-  "streaming")
+  "transformation"|"streaming")
+    # Mise à jour du chemin vers la classe de test refactorisée
     run_test "integration.streaming.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
     ;;
   "pipeline")
@@ -154,18 +157,22 @@ case $TEST_TYPE in
   "recommendation")
     run_test "integration.recommendation.TransformerRecommenderIntegrationSpec" "$DEBUG_ARGS"
     ;;
+  "data-manager")
+    # Nouveau test pour la classe DataManager
+    run_test "integration.data.DataManagerIntegrationSpec" "$DEBUG_ARGS"
+    ;;
   "contextual")
     run_test "integration.recommendation.ContextualRecommendationSpec" "$DEBUG_ARGS"
     ;;
   "all")
-    # List all integration test classes explicitly
-    run_test "integration.transformation.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
+    # Liste mise à jour de toutes les classes de test d'intégration
     run_test "integration.streaming.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
     run_test "integration.pipeline.PipelineIntegrationSpec" "$DEBUG_ARGS"
-    run_test "e2e.pipeline.CompletePipelineSpec" "$DEBUG_ARGS"
     run_test "integration.messaging.TransformerRecommenderMessagingSpec" "$DEBUG_ARGS"
     run_test "integration.recommendation.TransformerRecommenderIntegrationSpec" "$DEBUG_ARGS"
+    run_test "integration.data.DataManagerIntegrationSpec" "$DEBUG_ARGS"
     run_test "integration.recommendation.ContextualRecommendationSpec" "$DEBUG_ARGS"
+    run_test "e2e.pipeline.CompletePipelineSpec" "$DEBUG_ARGS"
     ;;
   specific:*)
     # Extract the specific test class name after 'specific:'
