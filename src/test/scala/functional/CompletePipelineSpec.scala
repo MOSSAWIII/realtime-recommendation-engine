@@ -13,7 +13,7 @@ import io.circe.parser._
 import io.circe.syntax._
 
 import models._
-import core._
+import application.core._
 import common.utils.RabbitMQManager
 import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback}
 import common.utils.MockDataManager

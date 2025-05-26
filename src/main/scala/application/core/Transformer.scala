@@ -1,7 +1,8 @@
 package application.core
 
 import domain.models._
-import infrastructure.config.{RabbitMQManager, ConfigurationService}
+import infrastructure.messaging.rabbitmq.RabbitMQManager
+import infrastructure.config.ConfigurationService
 import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback, ConfirmCallback, AMQP}
 import io.circe.parser.decode
 import io.circe.syntax._

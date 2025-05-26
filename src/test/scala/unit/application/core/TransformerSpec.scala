@@ -1,6 +1,6 @@
 package unit.application.core
 
-import core.{Transformer, DataManager}
+import application.core.{Transformer, DataManager}
 import models.{UserEvent, ProcessedEvent, RecommendationRequest}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

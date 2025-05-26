@@ -3,7 +3,7 @@ package integration.recommendation
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import models.{ProcessedEvent, User, UserFriend, Event, Recommendation, RecommendationRequest}
-import core.Recommender
+import application.core.Recommender
 import repositories.Repository
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._

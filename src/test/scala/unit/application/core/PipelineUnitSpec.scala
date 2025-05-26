@@ -1,6 +1,6 @@
 package unit.pipeline
 
-import core.{Transformer, Recommender}
+import application.core.{Transformer, Recommender}
 import models._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

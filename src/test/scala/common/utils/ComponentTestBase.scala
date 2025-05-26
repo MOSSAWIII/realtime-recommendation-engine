@@ -4,7 +4,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import scala.concurrent.ExecutionContext
 import common.utils.RabbitMQManager
-import core.{DataManager, Transformer, Recommender}
+import application.core.{DataManager, Transformer, Recommender}
 import java.util.concurrent.CountDownLatch
 import org.slf4j.LoggerFactory
 

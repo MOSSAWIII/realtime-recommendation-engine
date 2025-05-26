@@ -1,6 +1,6 @@
 package common.mocks
 
-import core.DataManager
+import application.core.DataManager
 import models._
 import scala.concurrent.{ExecutionContext, Future}
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}

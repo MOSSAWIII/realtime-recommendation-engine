@@ -7,7 +7,7 @@ import scala.concurrent.{ExecutionContext, Promise}
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 
-import core.Transformer
+import application.core.Transformer
 import common.utils.RabbitMQManager
 
 abstract class TransformerTestBase extends AnyWordSpec with BeforeAndAfterEach with Matchers {

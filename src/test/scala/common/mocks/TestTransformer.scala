@@ -1,6 +1,6 @@
 package integration.streaming
 
-import core.{Transformer, StreamingConsumer}
+import application.core.{Transformer, StreamingConsumer}
 import com.rabbitmq.client.{DeliverCallback, CancelCallback}
 import models.{UserEvent, ProcessedEvent, RecommendationRequest}
 import io.circe.parser.decode

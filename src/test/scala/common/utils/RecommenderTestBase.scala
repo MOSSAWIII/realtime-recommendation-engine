@@ -7,7 +7,7 @@ import scala.concurrent.{ExecutionContext, Promise, Future, Await}
 import scala.concurrent.duration._
 import java.util.concurrent.CountDownLatch
 
-import core.Recommender
+import application.core.Recommender
 import models.{Recommendation, ProcessedEvent}
 import common.utils.RabbitMQManager
 import com.rabbitmq.client.{DeliverCallback, CancelCallback}

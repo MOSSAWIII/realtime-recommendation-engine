@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
 import common.utils.IntegrationSpec
 import common.utils.{TestConfig, RabbitMQManager}
-import core.{StreamingConsumer, Transformer}
+import application.core.{StreamingConsumer, Transformer}
 import repositories.Repository
 import models.UserEvent
 import io.circe.syntax._

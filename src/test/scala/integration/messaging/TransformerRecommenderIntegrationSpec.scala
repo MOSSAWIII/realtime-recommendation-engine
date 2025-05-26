@@ -3,7 +3,7 @@ package integration.recommendation
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
-import core.{Transformer, Recommender}
+import application.core.{Transformer, Recommender}
 import repositories.Repository
 import models.{UserEvent, ProcessedEvent, Recommendation, RecommendedItem}
 import scala.concurrent.ExecutionContext.Implicits.global

@@ -19,12 +19,13 @@ import java.util.LinkedHashMap
 import java.util.function.{Function => JFunction, BiFunction => JBiFunction}
 import scala.jdk.CollectionConverters._
 import utils.metrics.{MetricsRegistry, HealthCheckRegistry, SystemStatus, HealthStatus, HealthCheckResult}
+import application.core.RecommenderConstants._
 
 /**
  * Enhanced recommender component that generates personalized recommendations
  * using in-memory caching and optimized algorithms.
  */
-class Recommender(dataManager: DataManager)(implicit ec: ExecutionContext) {
+class Recommender(private val dataManager: DataManager) {
   private val logger = LoggerFactory.getLogger(getClass)
   private val componentName = "recommender"
   
@@ -650,7 +651,7 @@ class Recommender(dataManager: DataManager)(implicit ec: ExecutionContext) {
   }
   
   /**
-   * Get user friends from memory first, then from repository if needed
+   * Get user friends from memory first, then from DataManager if needed
    */
   private def getUserFriends(userId: Long): Future[List[UserFriend]] = {
     userFriendsCache.get(userId) match {
@@ -659,8 +660,8 @@ class Recommender(dataManager: DataManager)(implicit ec: ExecutionContext) {
         Future.successful(friends)
         
       case None =>
-        // Fetch from repository
-        logger.debug(s"Fetching friends for user $userId from repository")
+        // Fetch from DataManager instead of repository
+        logger.debug(s"Fetching friends for user $userId from DataManager")
         dataManager.getUserFriends(userId).map { friends =>
           userFriendsCache.put(userId, friends)
           friends

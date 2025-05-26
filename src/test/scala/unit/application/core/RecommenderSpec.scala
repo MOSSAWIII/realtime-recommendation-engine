@@ -1,6 +1,6 @@
 package unit.application.core
 
-import core.{Recommender, DataManager}
+import application.core.{Recommender, DataManager}
 import models._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

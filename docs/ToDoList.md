@@ -1,124 +1,49 @@
-# To-Do Liste Détaillée pour l'Alignement avec l'Architecture Technique de Référence
+# To-Do List: Refactoring Database Access Through DataManager Only
 
-## 1. Suppression du DataLoader et consolidation dans DataManager
+## 1. Architecture Changes
+- [ ] Remove Repository abstract class references and any repository implementations
+- [ ] Ensure DataManager is the single point of access for PostgreSQL in the diagram
+- [ ] Update any documentation to reflect the new architecture
 
-### Tâches:
-- Supprimer complètement DataLoader.scala
-- Vérifier les dépendances du constructeur dans les classes qui l'utilisent
-- Modifier les services qui injectent DataLoader pour utiliser directement DataManager
-- Mettre à jour les tests qui référencent DataLoader
-- Intégrer les méthodes utiles de DataLoader dans DataManager
-  - Vérifier si loadAllAsync() et loadAll() sont nécessaires; si oui, les ajouter à DataManager
-  - Migrer la méthode getEventKeywords() vers DataManager si elle est utilisée ailleurs
-- S'assurer que le consommateur historical_data_queue est correctement implémenté dans DataManager
-  - Confirmer que initHistoricalDataConsumer() dans DataManager est complet et fonctionnel
-  - S'assurer que le traitement des messages suit la même logique que celle qui était dans DataLoader
+## 2. DataManager Core Enhancements
+- [ ] Implement connection pooling directly in DataManager (HikariCP)
+- [ ] Create proper transaction management functionality
+- [ ] Add connection cleanup and resource management
+- [ ] Set up database health checks accessible via metrics
 
-## 2. Intégration de StreamingConsumer dans Transformer
+## 3. Database Operations Implementation
+- [ ] Move all PostgreSQL queries from repositories into DataManager methods
+- [ ] Implement CRUD operations for all domain models
+- [ ] Add batch operations capability for performance
+- [ ] Create appropriate caching mechanisms for frequently accessed data
 
-### Tâches:
-- Modifier la classe Transformer
-  ```scala
-  def start(): Unit = {
-    logger.info("Starting Transformer consumer...")
-    
-    // Créer un canal pour le consumer
-    val channel = RabbitMQManager.createChannel("transformer-consumer")
-    
-    // Déclarer le topic exchange
-    val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
-    channel.exchangeDeclare(exchange, "topic", true)
-    
-    // Logique du consommateur (inspiré de StreamingConsumer)
-    // ...
-  }
-  ```
-- Ajouter un gestionnaire de fermeture à Transformer
-- Migrer les métriques de StreamingConsumer vers Transformer
-- Supprimer la classe StreamingConsumer
-  - Vérifier et adapter toutes les références à StreamingConsumer dans le code
-  - Mettre à jour les tests utilisant StreamingConsumer pour qu'ils utilisent Transformer directement
+## 4. Method Signature Fixes
+- [ ] Fix mapResultSetToEvent method signature and implementation
+- [ ] Fix mapResultSetToUser method to properly map all fields
+- [ ] Implement missing methods like getAllActiveEvents(), getUserFriends(), etc.
+- [ ] Add proper ExecutionContext handling for async operations
 
-## 3. Révision des Repositories et consolidation dans DataManager
+## 5. External Component Updates
+- [ ] Update Recommender to only use DataManager for data access
+- [ ] Update Transformer to only use DataManager for data access
+- [ ] Ensure event processing still works with the new architecture
+- [ ] Fix any references to non-existent Repository objects
 
-### Tâches:
-- Analyser l'utilisation des repositories
-- Migrer les méthodes manquantes des repositories vers DataManager
-- Simplifier les dépendances d'injection
+## 6. Testing Updates
+- [ ] Refactor unit tests to mock DataManager instead of individual repositories
+- [ ] Update integration tests that might have been using repositories directly
+- [ ] Create comprehensive tests for DataManager CRUD operations
+- [ ] Test transaction handling and failure scenarios
 
-## 4. Nettoyage des configurations RabbitMQ obsolètes
+## 7. Error Handling & Monitoring
+- [ ] Implement database-specific error handling in DataManager
+- [ ] Add monitoring metrics for database operations
+- [ ] Set up logging for all database operations
+- [ ] Create backpressure mechanisms for heavy database load
 
-### Tâches:
-- Mettre à jour RabbitMQManager
-  ```scala
-  object Queues {
-    val PROCESSED_EVENTS = "processed_events_queue"
-    val RECOMMENDATIONS = "recommendations_queue"
-    val HISTORICAL_DATA = "historical_data_queue"
-  }
-  ```
-- Corriger les routing keys
-- Vérifier les bindings
+## 8. Schema/Decoder Related Fixes
+- [ ] Fix CirceJson decoders for all model classes
+- [ ] Ensure consistency between database schema and model classes
+- [ ] Implement proper mappings for all database columns
 
-## 5. Nettoyage du code mort dans les classes principales
-
-### Tâches:
-- Nettoyer Transformer.scala
-- Nettoyer DataManager.scala
-- Nettoyer les fichiers de configuration
-
-## 6. Mise à jour des fichiers de test
-
-### Tâches:
-- Mettre à jour les tests d'intégration
-- Mettre à jour les mocks
-- Adapter les tests e2e et d'intégration
-
-## 7. Mise à jour de la documentation et des exemples
-
-### Tâches:
-- Mettre à jour la documentation technique
-- Créer ou mettre à jour les exemples d'utilisation
-
-## 8. Vérification finale et validation
-
-### Tâches:
-- Exécuter tous les tests
-- Validation de l'architecture
-- Revue de performance
-
-
-
-Comment mettre à jour la classe TransformerSpec.scala pour qu'elle reflète les changements suivants:
-1. Le constructeur de Transformer prend maintenant DataManager comme paramètre
-2. La méthode start() gère désormais la consommation des messages
-3. La méthode close() ferme désormais les canaux de consommation et de publication
-
-Comment adapter la classe de test TransformerUnderTest pour qu'elle fonctionne avec la nouvelle signature du constructeur de Transformer et évite les appels RabbitMQ réels pendant les tests?
-
-Comment identifier et supprimer toutes les références à StreamingConsumer dans les tests d'intégration et remplacer par l'utilisation directe de Transformer? Par exemple dans PipelineIntegrationSpec.scala.
-
-Comment mettre à jour TransformerRecommenderMessagingSpec.scala pour utiliser directement Transformer à la place de StreamingConsumer et adapter les méthodes de setup et teardown?
-
-Comment refactoriser StreamingTransformerIntegrationSpec.scala pour utiliser la nouvelle conception où Transformer consomme directement les messages? Que faire de la classe TestStreamingConsumer?
-
-Comment créer une implémentation mock de DataManager pour remplacer les mocks des repositories individuels dans les tests?
-
-Comment adapter CompletePipelineSpec.scala pour utiliser la nouvelle architecture sans StreamingConsumer et avec DataManager au lieu des repositories?
-
-Comment refactoriser l'initialisation des composants dans les tests pour tenir compte de la nouvelle chaîne de dépendances (DataManager → Transformer → Recommender)?
-
-Comment adapter les assertions dans les tests pour vérifier le comportement correct après les refactorisations? Quelles nouvelles vérifications devraient être ajoutées?
-
-Comment mettre à jour run-tests.sh pour refléter les changements dans l'architecture et s'assurer que les tests s'exécutent correctement?
-
-Comment adapter la classe MockRepository pour qu'elle fonctionne comme un mock de DataManager plutôt que comme un Repository? Quelles méthodes doivent être implémentées?
-
-Quels nouveaux tests unitaires ajouter à TransformerSpec.scala pour vérifier les fonctionnalités consommateur qui ont été migrées depuis StreamingConsumer?
-
-Comment adapter ou remplacer RabbitMQTestManager pour qu'il fonctionne correctement avec la nouvelle structure des échanges et des files d'attente?
-
-Comment mettre à jour le script setup-test-queues.sh pour qu'il corresponde aux nouvelles définitions des échanges et files d'attente dans RabbitMQManager?
-
-Le fichier Dockerfile.test doit-il être modifié pour tenir compte des changements dans la structure du projet? Si oui, comment?
-
+This approach keeps all PostgreSQL connections isolated to the DataManager class, which aligns with your simplified technical diagram where DataManager is the only component connecting to the database.

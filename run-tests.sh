@@ -25,22 +25,28 @@ function print_error() {
 function show_help() {
   echo "Usage: ./run-tests.sh [TEST_TYPE] [DEBUG]"
   echo ""
-  echo "Run integration tests with Docker container dependencies."
+  echo "Run tests with Docker container dependencies based on the new test organization."
   echo ""
   echo "Available TEST_TYPE options:"
-  echo "  streaming         - Run StreamingTransformerIntegrationSpec (refactorisé)"
-  echo "  pipeline          - Run PipelineIntegrationSpec and CompletePipelineSpec"
-  echo "  messaging         - Run TransformerRecommenderMessagingSpec"
-  echo "  recommendation    - Run TransformerRecommenderIntegrationSpec"
-  echo "  data-manager      - Run DataManagerIntegrationSpec (nouveau)"
-  echo "  contextual        - Run ContextualRecommendationSpec"
-  echo "  specific:[class]  - Run a specific integration test class"
-  echo "                      Example: ./run-tests.sh specific:integration.streaming.StreamingTransformerIntegrationSpec"
-  echo "  all               - Run all integration tests"
+  echo "  unit             - Run all unit tests"
+  echo "  unit:domain      - Run domain model unit tests"
+  echo "  unit:application - Run application core unit tests"
+  echo "  unit:infra       - Run infrastructure unit tests"
+  echo ""
+  echo "  integration      - Run all integration tests"
+  echo "  integration:db   - Run database integration tests"
+  echo "  integration:msg  - Run messaging integration tests"
+  echo "  integration:api  - Run API integration tests"
+  echo "  integration:txn  - Run transformation integration tests"
+  echo ""
+  echo "  functional       - Run all functional end-to-end tests"
+  echo ""
+  echo "  specific:[class] - Run a specific test class"
+  echo "                     Example: ./run-tests.sh specific:unit.application.core.TransformerSpec"
+  echo ""
+  echo "  all              - Run all tests"
   echo ""
   echo "Add 'debug' as second parameter to enable verbose debugging"
-  echo ""
-  echo "Default if no option provided: streaming"
   exit 0
 }
 
@@ -80,15 +86,15 @@ function setup_rabbitmq_queues() {
   # Create the required queues from the simplified diagram
   echo "Creating test queues in RabbitMQ..."
   
-  # Créer l'exchange principal selon le diagramme technique
+  # Create the main exchange according to the technical diagram
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare exchange name=user_actions_exchange type=topic durable=true || true
   
-  # Créer les queues selon le diagramme technique 
+  # Create the queues according to the technical diagram
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=processed_events_queue durable=true || true
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=recommendations_queue durable=true || true
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare queue name=historical_data_queue durable=true || true
   
-  # Créer les bindings avec les routing keys selon l'architecture
+  # Create bindings with routing keys according to the architecture
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=processed_events_queue routing_key="event.processed.#" || true
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=recommendations_queue routing_key="recommendation.result.#" || true
   docker-compose -f docker-compose-test.yml exec test-rabbitmq rabbitmqadmin declare binding source=user_actions_exchange destination=historical_data_queue routing_key="historical.data.#" || true
@@ -123,7 +129,7 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
 fi
 
 # Parse command line arguments
-TEST_TYPE=${1:-"streaming"}
+TEST_TYPE=${1:-"unit"}
 DEBUG_MODE=${2:-""}
 
 # Process debug flag
@@ -138,41 +144,50 @@ fi
 # Setup test environment
 check_prerequisites
 cleanup_containers
-setup_containers
-setup_rabbitmq_queues
+
+# Only start containers for integration and functional tests
+if [[ "$TEST_TYPE" == "integration"* || "$TEST_TYPE" == "functional"* || "$TEST_TYPE" == "all" ]]; then
+  setup_containers
+  setup_rabbitmq_queues
+fi
 
 # Run tests based on selected type
 case $TEST_TYPE in
-  "transformation"|"streaming")
-    # Mise à jour du chemin vers la classe de test refactorisée
-    run_test "integration.streaming.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
+  "unit")
+    run_test "unit.**" "$DEBUG_ARGS"
     ;;
-  "pipeline")
-    run_test "integration.pipeline.PipelineIntegrationSpec" "$DEBUG_ARGS"
-    run_test "e2e.pipeline.CompletePipelineSpec" "$DEBUG_ARGS"
+  "unit:domain")
+    run_test "unit.domain.**" "$DEBUG_ARGS"
     ;;
-  "messaging")
-    run_test "integration.messaging.TransformerRecommenderMessagingSpec" "$DEBUG_ARGS"
+  "unit:application")
+    run_test "unit.application.**" "$DEBUG_ARGS"
     ;;
-  "recommendation")
-    run_test "integration.recommendation.TransformerRecommenderIntegrationSpec" "$DEBUG_ARGS"
+  "unit:infra")
+    run_test "unit.infrastructure.**" "$DEBUG_ARGS"
     ;;
-  "data-manager")
-    # Nouveau test pour la classe DataManager
-    run_test "integration.data.DataManagerIntegrationSpec" "$DEBUG_ARGS"
+  "integration")
+    run_test "integration.**" "$DEBUG_ARGS"
     ;;
-  "contextual")
-    run_test "integration.recommendation.ContextualRecommendationSpec" "$DEBUG_ARGS"
+  "integration:db")
+    run_test "integration.db.**" "$DEBUG_ARGS"
+    ;;
+  "integration:msg")
+    run_test "integration.messaging.**" "$DEBUG_ARGS"
+    ;;
+  "integration:api")
+    run_test "integration.api.**" "$DEBUG_ARGS"
+    ;;
+  "integration:txn")
+    run_test "integration.transformation.**" "$DEBUG_ARGS"
+    ;;
+  "functional")
+    run_test "functional.**" "$DEBUG_ARGS"
     ;;
   "all")
-    # Liste mise à jour de toutes les classes de test d'intégration
-    run_test "integration.streaming.StreamingTransformerIntegrationSpec" "$DEBUG_ARGS"
-    run_test "integration.pipeline.PipelineIntegrationSpec" "$DEBUG_ARGS"
-    run_test "integration.messaging.TransformerRecommenderMessagingSpec" "$DEBUG_ARGS"
-    run_test "integration.recommendation.TransformerRecommenderIntegrationSpec" "$DEBUG_ARGS"
-    run_test "integration.data.DataManagerIntegrationSpec" "$DEBUG_ARGS"
-    run_test "integration.recommendation.ContextualRecommendationSpec" "$DEBUG_ARGS"
-    run_test "e2e.pipeline.CompletePipelineSpec" "$DEBUG_ARGS"
+    # Run all tests - unit first, then integration, then functional
+    run_test "unit.**" "$DEBUG_ARGS"
+    run_test "integration.**" "$DEBUG_ARGS"
+    run_test "functional.**" "$DEBUG_ARGS"
     ;;
   specific:*)
     # Extract the specific test class name after 'specific:'
