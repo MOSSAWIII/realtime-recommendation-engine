@@ -1,10 +1,10 @@
 package integration.recommendation
 
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.IntegrationTestBase
 import org.scalatest.matchers.should.Matchers
-import models.{ProcessedEvent, User, UserFriend, Event, Recommendation, RecommendationRequest}
+import domain.models.{ProcessedEvent, User, UserFriend, Event, Recommendation, RecommendationRequest}
 import application.core.Recommender
-import repositories.Repository
+import application.core.Repository
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global

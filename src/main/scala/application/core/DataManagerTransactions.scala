@@ -2,7 +2,7 @@ package application.core
 
 import java.sql.{Connection, SQLException}
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, TimeUnit, Executors}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Try, Success, Failure}
 import org.slf4j.LoggerFactory
@@ -17,10 +17,30 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
   private val componentName = "data-manager-transactions"
   
   // Metrics
-  private val transactionCounter = MetricsRegistry.counter(s"$componentName.transactions.count")
-  private val transactionSuccessCounter = MetricsRegistry.counter(s"$componentName.transactions.success")
-  private val transactionFailureCounter = MetricsRegistry.counter(s"$componentName.transactions.failure")
-  private val transactionRollbackCounter = MetricsRegistry.counter(s"$componentName.transactions.rollback")
+  private val transactionCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "transactions", "count"),
+    "Number of transactions executed",
+    "transactions"
+  )
+  
+  private val transactionSuccessCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "transactions", "success"),
+    "Number of successful transactions",
+    "transactions"
+  )
+  
+  private val transactionFailureCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "transactions", "failure"),
+    "Number of failed transactions",
+    "errors"
+  )
+  
+  private val transactionRollbackCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "transactions", "rollback"),
+    "Number of rolled back transactions",
+    "rollbacks"
+  )
+  
   private val transactionDuration = MetricsRegistry.buildHistogram(
     MetricsRegistry.MetricMetadata(componentName, "transactions", "duration"),
     "Transaction duration distribution",
@@ -39,6 +59,9 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
     stackTrace: Array[StackTraceElement]
   )
   
+  // Create a dedicated scheduler
+  private val scheduler = Executors.newSingleThreadScheduledExecutor()
+
   /**
    * Start monitoring for transactions.
    */
@@ -46,7 +69,7 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
     logger.info("Starting transaction monitoring")
     
     // Schedule a task to log long-running transactions
-    MetricsRegistry.scheduler.scheduleAtFixedRate(
+    scheduler.scheduleAtFixedRate(
       () => monitorLongRunningTransactions(),
       30,
       30,
@@ -84,72 +107,64 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
    * @return Future containing the result of the operation
    */
   def withTransaction[T](operation: Connection => T): Future[T] = {
+    val conn = dataManager.getConnection()
+    val transactionId = transactionIdCounter.incrementAndGet()
     transactionCounter.inc()
-    val txId = transactionIdCounter.incrementAndGet()
+    
+    logger.debug(s"Starting transaction $transactionId")
     val startTime = System.currentTimeMillis()
     
-    // Create transaction info for monitoring
     val txInfo = TransactionInfo(
-      id = txId,
-      startTime = startTime,
-      threadName = Thread.currentThread().getName,
-      stackTrace = Thread.currentThread().getStackTrace
+      transactionId,
+      startTime,
+      Thread.currentThread().getName,
+      Thread.currentThread().getStackTrace
     )
+    activeTransactions.put(transactionId, txInfo)
     
-    activeTransactions.put(txId, txInfo)
-    
-    // Get connection from pool
-    var conn: Connection = null
-    try {
-      conn = dataManager.getConnection()
-      
-      // MySQL and PostgreSQL default to auto-commit
-      conn.setAutoCommit(false)
-      
-      // Execute the operation
-      Future {
-        try {
-          val result = operation(conn)
-          conn.commit()
-          transactionSuccessCounter.inc()
-          result
-        } catch {
-          case e: Exception =>
-            try {
-              if (conn != null && !conn.isClosed) {
-                conn.rollback()
-                transactionRollbackCounter.inc()
-                logger.warn(s"Transaction rolled back due to: ${e.getMessage}")
-              }
-            } catch {
-              case re: SQLException =>
-                logger.error(s"Failed to rollback transaction: ${re.getMessage}", re)
-            }
-            transactionFailureCounter.inc()
-            throw new DatabaseException(s"Transaction failed: ${e.getMessage}", e)
-        } finally {
-          val duration = System.currentTimeMillis() - startTime
-          transactionDuration.update(duration)
-          activeTransactions.remove(txId)
-          
-          // Close connection
-          if (conn != null) {
-            try {
-              conn.setAutoCommit(true) // Reset to default state
-              conn.close()
-            } catch {
-              case e: SQLException =>
-                logger.warn(s"Failed to close connection: ${e.getMessage}", e)
-            }
+    Future {
+      try {
+        val originalAutoCommit = conn.getAutoCommit
+        conn.setAutoCommit(false)
+        
+        val result = operation(conn)
+        
+        conn.commit()
+        val endTime = System.currentTimeMillis()
+        transactionSuccessCounter.inc()
+        
+        logger.debug(s"Transaction $transactionId committed successfully in ${endTime - startTime}ms")
+        activeTransactions.remove(transactionId)
+        
+        result
+      } catch {
+        case e: Exception =>
+          try {
+            conn.rollback()
+            transactionRollbackCounter.inc()
+          } catch {
+            case rollbackEx: SQLException =>
+              logger.error(s"Failed to rollback transaction $transactionId", rollbackEx)
           }
+          
+          transactionFailureCounter.inc()
+          activeTransactions.remove(transactionId)
+          
+          logger.error(s"Transaction $transactionId failed: ${e.getMessage}", e)
+          throw DatabaseException(s"Transaction failed: ${e.getMessage}", e, Map(
+            "transactionId" -> transactionId.toString,
+            "threadName" -> Thread.currentThread().getName,
+            "duration" -> (System.currentTimeMillis() - startTime).toString
+          ))
+      } finally {
+        try {
+          conn.close()
+          logger.debug(s"Connection closed for transaction $transactionId")
+        } catch {
+          case e: SQLException =>
+            logger.warn(s"Failed to close connection for transaction $transactionId: ${e.getMessage}")
         }
       }
-    } catch {
-      case e: Exception =>
-        // Handle connection acquisition failure
-        activeTransactions.remove(txId)
-        transactionFailureCounter.inc()
-        Future.failed(new DatabaseException(s"Failed to acquire database connection: ${e.getMessage}", e))
     }
   }
   

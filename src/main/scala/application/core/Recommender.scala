@@ -25,7 +25,7 @@ import application.core.RecommenderConstants._
  * Enhanced recommender component that generates personalized recommendations
  * using in-memory caching and optimized algorithms.
  */
-class Recommender(private val dataManager: DataManager) {
+class Recommender(private val dataManager: DataManager)(implicit val ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
   private val componentName = "recommender"
   
@@ -91,7 +91,7 @@ class Recommender(private val dataManager: DataManager) {
   private class LRUCache[K, V](maxSize: Int) {
     private val map = new LinkedHashMap[K, V](16, 0.75f, true) {
       override protected def removeEldestEntry(eldest: java.util.Map.Entry[K, V]): Boolean = {
-        size() > maxSize
+        this.size() > maxSize
       }
     }
     

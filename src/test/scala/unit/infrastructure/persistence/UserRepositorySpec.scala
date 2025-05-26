@@ -5,18 +5,18 @@ import org.powermock.api.mockito.PowerMockito
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
 import org.scalatest._
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.UnitTestBase
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import common.utils.DatabaseConfig
 import scala.concurrent.ExecutionContext
 import org.junit.runner.RunWith
 import org.powermock.modules.junit4.PowerMockRunner
-import common.utils.TestImports
+import common.mocks.MockManager
 import org.mockito.ArgumentMatchers.anyString
 
 @RunWith(classOf[PowerMockRunner])
 @PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
-class UserRepositorySpec extends AnyFlatSpec {
+class UserRepositorySpec extends UnitTestBase {
   implicit val ec: ExecutionContext = ExecutionContext.global
   
   // Set up the mocks

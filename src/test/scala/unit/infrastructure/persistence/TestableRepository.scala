@@ -7,7 +7,7 @@ import org.scalatest._
 import org.scalatest.flatspec.AnyFlatSpec
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import scala.concurrent.ExecutionContext
-import common.utils.TestImports
+import common.mocks.MockManager
 import org.junit.runner.RunWith
 import org.powermock.modules.junit4.PowerMockRunner
 

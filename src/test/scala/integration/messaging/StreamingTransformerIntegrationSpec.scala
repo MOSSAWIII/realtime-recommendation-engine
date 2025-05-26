@@ -1,13 +1,13 @@
 package integration.transformation
 
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.IntegrationTestBase
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
-import common.utils.IntegrationSpec
+import common.base.IntegrationSpec
 import common.utils.{TestConfig, RabbitMQManager}
 import application.core.{StreamingConsumer, Transformer}
-import repositories.Repository
-import models.UserEvent
+import application.core.Repository
+import domain.models.UserEvent
 import io.circe.syntax._
 import io.circe.parser._
 import io.circe.generic.auto._
@@ -18,7 +18,7 @@ import scala.concurrent.{Await, Future, Promise}
 import scala.concurrent.duration._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
-class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAndAfterAll {
+class StreamingTransformerIntegrationSpec extends IntegrationTestBase with BeforeAndAfterAll {
 
   // Test configuration
   val testQueueName = s"test_events_${UUID.randomUUID().toString}"
@@ -40,7 +40,7 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
       transformer = new Transformer(repository)(ec)
 
       // Create a test queue with durable=true to match production settings
-      val channel = RabbitMQManager.createChannel("test-setup")
+      val channel = TestMockManager.createChannel("test-setup")
       channel.queueDeclare(testQueueName, true, false, false, null)
       println(s"Test queue created: $testQueueName")
       
@@ -64,11 +64,11 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
       consumer.close()
     }
     
-    val channel = RabbitMQManager.createChannel("cleanup")
+    val channel = TestMockManager.createChannel("cleanup")
     try {
       channel.queueDelete(testQueueName)
     } finally {
-      RabbitMQManager.closeAllChannels()
+      TestMockManager.closeAllChannels()
     }
   }
 
@@ -81,7 +81,7 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
     println(s"Publishing test event to queue $testQueueName: $eventJson")
 
     // Act: Publish the event to the queue with persistent delivery mode
-    val channel = RabbitMQManager.createChannel("publisher")
+    val channel = TestMockManager.createChannel("publisher")
     val props = new AMQP.BasicProperties.Builder()
       .deliveryMode(2) // Make message persistent
       .build()
@@ -146,7 +146,7 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
   "Transformer" should "gérer correctement les erreurs de DataManager" in {
     // Créer un DataManager qui échoue délibérément
     val failingDataManager = new MockDataManager() {
-      override def storeProcessedEvent(event: ProcessedEvent): Future[ProcessedEvent] = 
+      override def storeProcessedEvent(event: domain.models.ProcessedEvent): Future[domain.models.ProcessedEvent] = 
         Future.failed(new RuntimeException("Test failure"))
     }
     
@@ -206,7 +206,7 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
     
     override def start(): Unit = {
       println(s"Starting test consumer for queue: $queueName")
-      channel = RabbitMQManager.createChannel("test-consumer")
+      channel = TestMockManager.createChannel("test-consumer")
       
       // Ensure the queue exists
       channel.queueDeclare(queueName, true, false, false, null)
@@ -275,9 +275,9 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
   class MockRepository extends Repository()(ec) {
     import scala.collection.mutable.ArrayBuffer
 
-    val storedEvents = ArrayBuffer[models.ProcessedEvent]()
+    val storedEvents = ArrayBuffer[domain.models.ProcessedEvent]()
 
-    override def storeProcessedEvent(event: models.ProcessedEvent): Future[models.ProcessedEvent] = {
+    override def storeProcessedEvent(event: domain.models.ProcessedEvent): Future[domain.models.ProcessedEvent] = {
       println(s"Storing event in mock repository: $event")
       storedEvents += event
       Future.successful(event.copy(id = Some(1L)))
@@ -285,7 +285,7 @@ class StreamingTransformerIntegrationSpec extends IntegrationSpec with BeforeAnd
 
     override def initTables(): Future[Unit] = Future.successful(())
     
-    override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[models.ProcessedEvent]] = {
+    override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[domain.models.ProcessedEvent]] = {
       println(s"Getting events for user $userId, current count: ${storedEvents.size}")
       println(s"All stored events: ${storedEvents.toList}")
       Future.successful(storedEvents.filter(_.userId == userId).toList.take(limit))

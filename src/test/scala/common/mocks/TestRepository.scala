@@ -1,18 +1,10 @@
 package common.mocks
 
 import application.core.DataManager
-import models._
+import domain.models._
 import scala.concurrent.{ExecutionContext, Future}
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
-import scala.jdk.CollectionConverters._
 import org.slf4j.LoggerFactory
-import java.util.concurrent.CountDownLatch
-import common.utils.MockDataManager
 
-/**
- * @deprecated Utiliser MockDataManager du package common.mocks à la place
- */
-@deprecated("Remplacer par testutil.MockDataManager", "Version 2.0")
 class TestRepository(implicit override val ec: ExecutionContext = scala.concurrent.ExecutionContext.global) extends DataManager {
   private val logger = LoggerFactory.getLogger(getClass)
   
@@ -31,11 +23,14 @@ class TestRepository(implicit override val ec: ExecutionContext = scala.concurre
     if (mockUserProfile.isDefined) mockDataManager.addUser(mockUserProfile.get)
     mockProcessedEvents.foreach(e => mockDataManager.storeProcessedEvent(e))
     mockEvents.foreach(e => mockDataManager.addEvent(e))
-    mockRecommendations.foreach { case (userId, rec) => mockDataManager.addRecommendation(rec) }
+    mockRecommendations.foreach { case (userId, rec) => 
+      mockDataManager.storeRecommendation(rec)
+    }
     
     // Regrouper les amitiés par userId
     mockUserFriends.groupBy(_.userId).foreach { case (userId, friends) => 
-      mockDataManager.addUserFriends(userId, friends)
+      mockDataManager.addUserFriend(friends.head)
+      friends.tail.foreach(mockDataManager.addUserFriend)
     }
   }
   
@@ -53,7 +48,13 @@ class TestRepository(implicit override val ec: ExecutionContext = scala.concurre
   }
   
   override def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = {
-    mockDataManager.getProcessedEventsForUser(userId, limit)
+    mockDataManager.getProcessedEventsForUser(userId, limit).map(_.toList)
+  }
+  
+  override def storeRecommendation(recommendation: Recommendation): Future[Recommendation] = {
+    val updatedRecommendation = recommendation.copy(id = Some(System.currentTimeMillis()))
+    mockRecommendations(recommendation.userId) = updatedRecommendation
+    mockDataManager.storeRecommendation(updatedRecommendation)
   }
   
   override def getUserProfile(userId: Long): Future[Option[User]] = {
@@ -68,22 +69,8 @@ class TestRepository(implicit override val ec: ExecutionContext = scala.concurre
     Future.successful(mockEvents)
   }
   
-  override def storeRecommendation(recommendation: Recommendation): Future[Recommendation] = {
-    val updatedRecommendation = recommendation.copy(id = Some(System.currentTimeMillis()))
-    mockRecommendations(recommendation.userId) = updatedRecommendation
-    mockDataManager.storeRecommendation(updatedRecommendation)
-  }
-  
   override def getRecommendationForUser(userId: Long): Future[Option[Recommendation]] = {
     Future.successful(mockRecommendations.get(userId))
-  }
-  
-  override def getRecentRecommendationForUser(userId: Long, timeWindow: Long): Future[Option[Recommendation]] = {
-    Future.successful(mockRecommendations.get(userId))
-  }
-  
-  override def getRecentProcessedEvents(limit: Int): Future[Seq[ProcessedEvent]] = {
-    Future.successful(mockProcessedEvents.take(limit))
   }
 }
 

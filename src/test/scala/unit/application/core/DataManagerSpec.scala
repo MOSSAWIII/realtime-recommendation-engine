@@ -1,7 +1,7 @@
 package unit.application.core
 
 import application.core.DataManager
-import common.utils.UnitFlatSpec
+import common.base.UnitSpec
 import infrastructure.config.{ConfigurationService, DatabaseConfigSection, DataManagerConfigSection}
 import com.typesafe.config.ConfigFactory
 import domain.models._
@@ -13,7 +13,7 @@ import scala.concurrent.duration._
 import java.sql.{Connection, PreparedStatement, ResultSet, SQLException}
 import utils.error.DatabaseException
 
-class DataManagerSpec extends UnitFlatSpec with Matchers {
+class DataManagerSpec extends UnitSpec with Matchers {
   implicit val ec: ExecutionContext = ExecutionContext.global
   
   "DataManager" should "handle database connectivity errors gracefully" in {

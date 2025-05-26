@@ -11,6 +11,19 @@ class DataManagerConfigSection(config: Config) extends ConfigSection {
     if (config.hasPath("dataManager")) config.getConfig("dataManager")
     else config.withFallback(defaultDataManagerConfig)
   
+  // Database connection settings
+  val jdbcUrl: String = config.getString("database.url")
+  val username: String = config.getString("database.user")
+  val password: String = config.getString("database.password")
+  val maxPoolSize: Int = config.getInt("database.poolSize")
+  val minIdle: Int = if (config.hasPath("database.minIdle")) config.getInt("database.minIdle") else 2
+  val idleTimeout: Long = if (config.hasPath("database.idleTimeout")) 
+    Duration(config.getString("database.idleTimeout")).toMillis else 600000L
+  val connectionTimeout: Long = if (config.hasPath("database.connectionTimeout")) 
+    Duration(config.getString("database.connectionTimeout")).toMillis else 30000L
+  val maxLifetime: Long = if (config.hasPath("database.maxLifetime")) 
+    Duration(config.getString("database.maxLifetime")).toMillis else 1800000L
+  
   // Cache configuration
   val l1CacheSize: Int = dataManagerConfig.getInt("cache.l1Size")
   val l2CacheSize: Int = dataManagerConfig.getInt("cache.l2Size")

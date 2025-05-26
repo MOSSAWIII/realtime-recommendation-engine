@@ -6,7 +6,7 @@ import scala.concurrent.duration._
 /**
  * Configuration for metrics and health checks
  */
-class MetricsConfigSection(config: Config) {
+class MetricsConfigSection(config: Config) extends ConfigSection {
   private val metricsConfig = config.getConfig("metrics")
   
   // Reporting configuration
@@ -23,4 +23,19 @@ class MetricsConfigSection(config: Config) {
   val healthCheckEnabled: Boolean = metricsConfig.getBoolean("healthCheck.enabled")
   val healthCheckIntervalSeconds: Int = metricsConfig.getInt("healthCheck.intervalSeconds")
   val healthCheckTimeoutMs: Int = metricsConfig.getInt("healthCheck.timeoutMs")
+  
+  // Ajouter cette méthode requise par le trait ConfigSection
+  override def validate(): Map[String, String] = {
+    val errors = scala.collection.mutable.Map[String, String]()
+    
+    if (healthCheckIntervalSeconds <= 0) {
+      errors += ("metrics.healthCheck.intervalSeconds" -> s"Health check interval must be positive, got $healthCheckIntervalSeconds")
+    }
+    
+    if (healthCheckTimeoutMs <= 0) {
+      errors += ("metrics.healthCheck.timeoutMs" -> s"Health check timeout must be positive, got $healthCheckTimeoutMs")
+    }
+    
+    errors.toMap
+  }
 }

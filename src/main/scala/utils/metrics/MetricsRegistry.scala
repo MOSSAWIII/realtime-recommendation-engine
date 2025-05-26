@@ -67,19 +67,19 @@ class Timer(
 ) extends Metric {
   private val count = new AtomicLong(0)
   private val totalTime = new AtomicLong(0)
-  private val minTime = new AtomicLong(Long.MaxValue)
+  private val minTime = new AtomicLong(java.lang.Long.MAX_VALUE)
   private val maxTime = new AtomicLong(0)
   private val sumSquares = new AtomicLong(0) // For standard deviation calculation
   
   private val recentTimes = new java.util.concurrent.ConcurrentLinkedQueue[Long]()
   private val maxRecentSamples = 100 // Keep last 100 samples for moving average
   
-  def record(durationNanos: Long): Unit = {
+  def recordNanos(durationNanos: Long): Unit = {
     val durationMillis = TimeUnit.NANOSECONDS.toMillis(durationNanos)
-    record(durationMillis)
+    recordMillis(durationMillis)
   }
   
-  def record(durationMillis: Long): Unit = {
+  def recordMillis(durationMillis: Long): Unit = {
     count.incrementAndGet()
     totalTime.addAndGet(durationMillis)
     
@@ -103,7 +103,7 @@ class Timer(
       block
     } finally {
       val durationNanos = System.nanoTime() - start
-      record(durationNanos)
+      recordNanos(durationNanos)
     }
   }
   
@@ -124,7 +124,7 @@ class Timer(
   def getCount(): Long = count.get()
   def getTotalTime(): Long = totalTime.get()
   def getAvg(): Double = if (count.get() > 0) totalTime.get().toDouble / count.get() else 0.0
-  def getMin(): Long = if (minTime.get() == Long.MaxValue) 0 else minTime.get()
+  def getMin(): Long = if (minTime.get() == java.lang.Long.MAX_VALUE) 0 else minTime.get()
   def getMax(): Long = maxTime.get()
   
   def getRecentAvg(): Double = {
@@ -144,7 +144,7 @@ class Timer(
   def reset(): Unit = {
     count.set(0)
     totalTime.set(0)
-    minTime.set(Long.MaxValue)
+    minTime.set(java.lang.Long.MAX_VALUE)
     maxTime.set(0)
     sumSquares.set(0)
     recentTimes.clear()
@@ -162,8 +162,8 @@ class Histogram(
 ) extends Metric {
   private val count = new AtomicLong(0)
   private val sum = new AtomicLong(0)
-  private val min = new AtomicLong(Long.MaxValue)
-  private val max = new AtomicLong(Long.MIN_VALUE)
+  private val min = new AtomicLong(java.lang.Long.MAX_VALUE)
+  private val max = new AtomicLong(java.lang.Long.MIN_VALUE)
   
   // Bucket boundaries for histogram distribution
   private val buckets = Array(1L, 5L, 10L, 25L, 50L, 100L, 250L, 500L, 1000L, 2500L, 5000L, 10000L)
@@ -208,8 +208,8 @@ class Histogram(
   
   def getCount(): Long = count.get()
   def getSum(): Long = sum.get()
-  def getMin(): Long = if (min.get() == Long.MaxValue) 0 else min.get()
-  def getMax(): Long = if (max.get() == Long.MIN_VALUE) 0 else max.get()
+  def getMin(): Long = if (min.get() == java.lang.Long.MAX_VALUE) 0 else min.get()
+  def getMax(): Long = if (max.get() == java.lang.Long.MIN_VALUE) 0 else max.get()
   def getAvg(): Double = if (count.get() > 0) sum.get().toDouble / count.get() else 0.0
   
   def getBucketCounts(): Map[Long, Long] = {
@@ -217,7 +217,7 @@ class Histogram(
       boundary -> bucketCounts(index).get()
     }.toMap
     
-    result + (Long.MaxValue -> overflowBucket.get())
+    result + (java.lang.Long.MAX_VALUE -> overflowBucket.get())
   }
   
   def getPercentiles(): Map[Int, Long] = {
@@ -255,14 +255,14 @@ class Histogram(
       i += 1
     }
     
-    if (i >= buckets.length) Long.MaxValue else buckets(i)
+    if (i >= buckets.length) java.lang.Long.MAX_VALUE else buckets(i)
   }
   
   def reset(): Unit = {
     count.set(0)
     sum.set(0)
-    min.set(Long.MaxValue)
-    max.set(Long.MIN_VALUE)
+    min.set(java.lang.Long.MAX_VALUE)
+    max.set(java.lang.Long.MIN_VALUE)
     bucketCounts.foreach(_.set(0))
     overflowBucket.set(0)
   }
@@ -730,6 +730,11 @@ object MetricsRegistry {
   def setReportingEnabled(enabled: Boolean): Unit = {
     reportingEnabled = enabled
   }
+  
+  /**
+   * Check if the metrics registry has been initialized
+   */
+  def isInitialized: Boolean = initialized
   
   /**
    * Shutdown metrics registry

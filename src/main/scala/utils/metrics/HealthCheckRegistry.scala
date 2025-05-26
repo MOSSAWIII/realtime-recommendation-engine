@@ -369,11 +369,15 @@ object HealthCheckRegistry {
   /**
    * Create a standard health check that executes the given function
    */
-  def createHealthCheck(component: String, name: String)
+  def createHealthCheck(componentValue: String, nameValue: String)
                       (checkFn: => HealthCheckResult): HealthCheck = {
     new HealthCheck {
-      override def component: String = component
-      override def name: String = name
+      // Utiliser des champs privés pour stocker les valeurs
+      private val componentName: String = componentValue
+      private val checkName: String = nameValue
+      
+      override def component: String = componentName
+      override def name: String = checkName
       override def execute(): HealthCheckResult = checkFn
     }
   }

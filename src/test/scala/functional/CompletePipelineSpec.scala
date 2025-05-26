@@ -1,203 +1,124 @@
-package e2e.pipeline
+package functional
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.BeforeAndAfterAll
-import org.slf4j.LoggerFactory
-import scala.concurrent.{Await, Future, ExecutionContext}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
-import java.util.concurrent.CountDownLatch
+import org.slf4j.LoggerFactory
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.nio.charset.StandardCharsets
-import io.circe.generic.auto._
-import io.circe.parser._
+import com.rabbitmq.client.{AMQP, DeliverCallback, CancelCallback}
+import io.circe.parser.decode
 import io.circe.syntax._
+import io.circe.generic.auto._
 
-import models._
-import application.core._
-import common.utils.RabbitMQManager
-import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback}
-import common.utils.MockDataManager
+import application.core.{Transformer, Recommender}
+import domain.models._
+import common.base.FunctionalTestBase
+import common.mocks.TestMockManager
+import common.mocks.TestMockManager.MockDataManager
 
-class CompletePipelineSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
-
-  // Composants du système
-  var dataManager: MockDataManager = _
-  var transformer: Transformer = _
-  var recommender: Recommender = _
-  
-  // Journalisation de débogage
+class CompletePipelineSpec extends FunctionalTestBase {
   private val logger = LoggerFactory.getLogger(getClass)
+
+  // Test data
+  val testUserId = 999L
+  val testItemId = 888L
   
-  // Données de test
-  private val testUserId = 42L
-  private val testItemId = 24L
-  private var publishChannel: Channel = _
-  private var consumeChannel: Channel = _
-  private var receivedRecommendation: Option[Recommendation] = None
-  private val latch = new CountDownLatch(1)
-  
-  implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global
+  // Promise to track recommendation publication
+  private var recommendationPromise: Promise[Recommendation] = Promise[Recommendation]()
+  private var consumerTag: String = _
+  private var recommendationChannel: com.rabbitmq.client.Channel = _
   
   override def beforeAll(): Unit = {
-    // Initialiser le DataManager mock
-    dataManager = new MockDataManager()
+    super.beforeAll()
     
-    // Configuration des données de test
-    setupTestData()
+    TestMockManager.initConnection()
     
-    // Initialiser les composants du système
-    transformer = new Transformer(dataManager)
-    recommender = new Recommender(dataManager)
+    // Setup recommendation listener
+    recommendationChannel = TestMockManager.createChannel("recommendation-channel")
+    recommendationChannel.queueDeclare(TestMockManager.Queues.RECOMMENDATIONS, true, false, false, null)
     
-    // Démarrer les composants - le transformer gère maintenant directement la consommation
-    recommender.start()
-    transformer.start()
-    
-    // Initialiser les canaux RabbitMQ
-    publishChannel = RabbitMQManager.createChannel("e2e-publisher")
-    consumeChannel = RabbitMQManager.createChannel("e2e-consumer")
-    
-    // Purger les queues avant le test
-    consumeChannel.queuePurge(RabbitMQManager.Queues.RECOMMENDATIONS)
-    
-    // Configurer le consumer pour capturer les recommandations
-    setupRecommendationListener()
-  }
-  
-  private def setupTestData(): Unit = {
-    // Créer un événement de test pré-traité
-    val testEvent = ProcessedEvent(
-      id = None,
-      userId = testUserId,
-      eventType = "view",
-      itemId = Some(testItemId),
-      properties = Map("category" -> "test", "importance" -> "high"),
-      timestamp = System.currentTimeMillis() - 5000
-    )
-    
-    // Configurer l'utilisateur test
-    val testUser = User(
-      userId = testUserId,
-      name = Some("Test User"),
-      location = Some("Paris, France"),
-      emailAddress = Some("test@example.com")
-    )
-    
-    // Configurer l'événement test
-    val testEventObj = Event(
-      id = Some(testItemId),
-      name = "Test Event",
-      description = Some("A test event"),
-      location = Some("Paris, France"),
-      startTime = System.currentTimeMillis() + 86400000L,
-      createdBy = 999L,
-      status = "active"
-    )
-    
-    // Configurer les données mock
-    dataManager.setupMockData(
-      users = List(testUser),
-      events = List(testEventObj),
-      processedEvents = List(testEvent)
-    )
-    
-    logger.info(s"Test data configured: User ${testUser.userId}, Event ${testEventObj.id.get}, ProcessedEvent for user ${testEvent.userId}")
-  }
-  
-  private def setupRecommendationListener(): Unit = {
-    // Configurer un consumer pour écouter les recommandations
-    val callback = new DeliverCallback {
-      override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
-        val message = new String(delivery.getBody, StandardCharsets.UTF_8)
-        logger.debug(s"Received message: $message")
-        
-        decode[Recommendation](message) match {
+    // Create callback to capture recommendations
+    val deliverCallback = new DeliverCallback {
+      override def handle(consumerTag: String, message: com.rabbitmq.client.Delivery): Unit = {
+        val recommendationJson = new String(message.getBody, StandardCharsets.UTF_8)
+        decode[Recommendation](recommendationJson) match {
           case Right(recommendation) =>
-            logger.info(s"Decoded recommendation for user: ${recommendation.userId}")
-            if (recommendation.userId == testUserId) {
-              logger.info(s"Received matching recommendation for test user $testUserId")
-              receivedRecommendation = Some(recommendation)
-              latch.countDown()
-            } else {
-              logger.debug(s"Ignoring recommendation for user: ${recommendation.userId}")
+            if (!recommendationPromise.isCompleted) {
+              recommendationPromise.success(recommendation)
             }
           case Left(error) =>
-            logger.error(s"Error decoding recommendation: $error")
+            logger.error(s"Failed to parse recommendation: $error")
         }
-        consumeChannel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
       }
     }
     
     val cancelCallback = new CancelCallback {
       override def handle(consumerTag: String): Unit = {
-        logger.warn(s"Consumer cancelled: $consumerTag")
+        logger.warn(s"Consumer was cancelled: $consumerTag")
       }
     }
     
-    // Démarrer la consommation avec ack manuel
-    consumeChannel.basicConsume(
-      RabbitMQManager.Queues.RECOMMENDATIONS,
-      false, // ack manuel
-      callback,
+    // Start consuming recommendations
+    consumerTag = recommendationChannel.basicConsume(
+      TestMockManager.Queues.RECOMMENDATIONS,
+      true,
+      deliverCallback,
       cancelCallback
     )
   }
   
   override def afterAll(): Unit = {
-    // Fermer proprement les ressources
-    if (recommender != null) recommender.close()
-    if (transformer != null) transformer.close()
-    if (dataManager != null) dataManager.close()
-    
-    // Fermer les canaux RabbitMQ
-    if (publishChannel != null && publishChannel.isOpen) publishChannel.close()
-    if (consumeChannel != null && consumeChannel.isOpen) consumeChannel.close()
-    
-    // Fermer toutes les connexions RabbitMQ
-    RabbitMQManager.closeAllChannels()
-  }
-  
-  "Complete recommendation pipeline" should "process an event and generate recommendations" in {
-    // Publier un événement de test
-    val event = UserEvent(
-      userId = testUserId,
-      eventType = "view",
-      itemId = Some(testItemId),
-      properties = Some(Map("test" -> "true", "source" -> "e2e_test")),
-      timestamp = System.currentTimeMillis()
-    )
-    
-    // Envoyer l'événement au pipeline
-    val message = event.asJson.noSpaces
-    publishChannel.basicPublish(
-      RabbitMQManager.Exchanges.USER_ACTIONS,  // Utiliser l'exchange correct
-      "user.action.event",  // Routing key appropriée
-      null,
-      message.getBytes(StandardCharsets.UTF_8)
-    )
-    
-    // Attendre la recommandation (avec timeout)
-    val success = latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
-    
-    // Vérifier que nous avons reçu une recommandation
-    success shouldBe true
-    receivedRecommendation.isDefined shouldBe true
-    
-    // Si la recommandation existe mais sans items, journaliser des informations utiles
-    if (receivedRecommendation.exists(_.recommendedItems.isEmpty)) {
-      logger.warn(s"Received empty recommendation: ${receivedRecommendation.get}")
-      
-      // Vérifier les événements traités pour cet utilisateur
-      val events = Await.result(dataManager.getProcessedEventsForUser(testUserId), 5.seconds)
-      logger.info(s"Found ${events.size} processed events for user $testUserId")
-      events.foreach(e => logger.info(s"  Event: $e"))
+    if (recommendationChannel != null && recommendationChannel.isOpen) {
+      if (consumerTag != null) {
+        try {
+          recommendationChannel.basicCancel(consumerTag)
+        } catch {
+          case _: Exception => // Ignore
+        }
+      }
+      TestMockManager.closeChannel("recommendation-channel")
     }
     
-    // Assertion plus spécifique maintenant que nous avons un meilleur contrôle des données de test
-    receivedRecommendation.isDefined shouldBe true
-    receivedRecommendation.foreach { recommendation =>
+    TestMockManager.cleanup()
+    super.afterAll()
+  }
+  
+  "Complete recommendation pipeline" should "process user events and generate recommendations" in {
+    // Reset promise for this test
+    recommendationPromise = Promise[Recommendation]()
+    
+    // Setup components
+    val mockDataManager = new MockDataManager()
+    val transformer = new Transformer(mockDataManager)
+    val recommender = new Recommender(mockDataManager)
+    
+    // Start components
+    transformer.start()
+    recommender.start()
+    
+    try {
+      // Create and publish a user event
+      val userEvent = UserEvent(
+        userId = testUserId,
+        eventType = "view",
+        itemId = Some(testItemId),
+        timestamp = System.currentTimeMillis()
+      )
+      
+      // Process the event
+      val processedEvent = Await.result(transformer.processEvent(userEvent), 5.seconds)
+      
+      // Wait for recommendation
+      val recommendation = Await.result(recommendationPromise.future, 10.seconds)
+      
+      // Verify recommendation
       recommendation.userId shouldBe testUserId
       recommendation.recommendedItems.nonEmpty shouldBe true
+      
+    } finally {
+      // Clean up
+      transformer.close()
+      recommender.close()
     }
   }
 }

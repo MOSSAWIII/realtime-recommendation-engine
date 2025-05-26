@@ -43,12 +43,42 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
   private var recommenderSyncChannel: Option[Channel] = None
   
   // Metrics
-  private val dataLoadCounter = MetricsRegistry.counter(s"$componentName.data.load.count")
-  private val dataLoadErrorCounter = MetricsRegistry.counter(s"$componentName.data.load.error.count")
-  private val cacheHitCounter = MetricsRegistry.counter(s"$componentName.cache.hit.count")
-  private val cacheMissCounter = MetricsRegistry.counter(s"$componentName.cache.miss.count")
-  private val connectionUsageCounter = MetricsRegistry.counter(s"$componentName.connection.usage")
-  private val connectionErrorCounter = MetricsRegistry.counter(s"$componentName.connection.error")
+  private val dataLoadCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "data", "load_count"),
+    "Number of data load operations",
+    "operations"
+  )
+  
+  private val dataLoadErrorCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "data", "load_error_count"),
+    "Number of data load errors",
+    "errors"
+  )
+  
+  private val cacheHitCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "cache", "hit_count"),
+    "Number of cache hits",
+    "hits"
+  )
+  
+  private val cacheMissCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "cache", "miss_count"),
+    "Number of cache misses",
+    "misses"
+  )
+  
+  private val connectionUsageCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "connection", "usage"),
+    "Number of database connections used",
+    "connections"
+  )
+  
+  private val connectionErrorCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "connection", "error"),
+    "Number of database connection errors",
+    "errors"
+  )
+  
   private val activeConnectionsGauge = MetricsRegistry.buildGauge(
     MetricsRegistry.MetricMetadata(componentName, "pool", "active_connections"),
     "Number of active connections in the pool",
@@ -82,7 +112,7 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
   private val ShortCacheTTL = dbConfig.shortCacheTTL
   private val LongCacheTTL = 30.minutes
 
-ant  // Helper methods for caching
+  // Helper methods for caching
   private def cacheKey(prefix: String, id: Any): String = s"$prefix-$id"
   
   private def getFromCache[T](prefix: String, id: Any): Option[T] = {
@@ -112,6 +142,57 @@ ant  // Helper methods for caching
   private def invalidateCache(prefix: String, id: Any): Unit = {
     val key = cacheKey(prefix, id)
     cache.remove(key)
+  }
+  
+  // Méthodes utilitaires pour les opérations SQL
+  private def withPreparedStatement[T](connection: Connection, sql: String)(f: PreparedStatement => T): T = {
+    val stmt = connection.prepareStatement(sql)
+    try {
+      f(stmt)
+    } finally {
+      stmt.close()
+    }
+  }
+
+  private def withResultSet[T](stmt: PreparedStatement)(f: ResultSet => T): T = {
+    val rs = stmt.executeQuery()
+    try {
+      f(rs)
+    } finally {
+      rs.close()
+    }
+  }
+  
+  /**
+   * Crée et configure une source de données HikariCP
+   */
+  private def createDataSource(): HikariDataSource = {
+    val hikariConfig = new HikariConfig()
+    hikariConfig.setJdbcUrl(dbConfig.jdbcUrl)
+    hikariConfig.setUsername(dbConfig.username)
+    hikariConfig.setPassword(dbConfig.password)
+    hikariConfig.setMaximumPoolSize(dbConfig.maxPoolSize)
+    hikariConfig.setMinimumIdle(dbConfig.minIdle)
+    hikariConfig.setIdleTimeout(dbConfig.idleTimeout)
+    hikariConfig.setConnectionTimeout(dbConfig.connectionTimeout)
+    hikariConfig.setMaxLifetime(dbConfig.maxLifetime)
+    hikariConfig.setPoolName("recommendation-engine-pool")
+    
+    new HikariDataSource(hikariConfig)
+  }
+  
+  /**
+   * Obtient une connexion depuis le pool
+   */
+  def getConnection(): Connection = {
+    connectionUsageCounter.inc()
+    try {
+      dataSource.getConnection()
+    } catch {
+      case e: SQLException =>
+        connectionErrorCounter.inc()
+        throw DatabaseException(s"Failed to get database connection: ${e.getMessage}", e)
+    }
   }
   
   // CRUD operations for User

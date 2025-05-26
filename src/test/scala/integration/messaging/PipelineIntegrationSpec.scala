@@ -1,9 +1,9 @@
 package integration.pipeline
 
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.IntegrationTestBase
 import org.scalatest.matchers.should.Matchers
-import models.{UserEvent, RecommendationRequest, Recommendation, ProcessedEvent}
-import common.utils.RabbitMQManager
+import domain.models.{UserEvent, RecommendationRequest, Recommendation, ProcessedEvent}
+import common.mocks.TestMockManager
 import scala.concurrent.{Await, Future, Promise}
 import scala.concurrent.duration._
 import io.circe.syntax._
@@ -15,6 +15,8 @@ import common.utils.{ComponentTestBase, MockDataManager}
 
 class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
   
+  private val logger = org.slf4j.LoggerFactory.getLogger(getClass)
+
   // Test data
   val testUserId = 999L
   val testItemId = 888L
@@ -60,11 +62,11 @@ class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
   }
   
   private def setupRecommendationListener(): Unit = {
-    recommendationChannel = RabbitMQManager.createChannel("test-rec-listener")
+    recommendationChannel = TestMockManager.createChannel("test-rec-listener")
     
     // Make sure the queue exists and clear any previous messages
-    recommendationChannel.queueDeclare(RabbitMQManager.Queues.RECOMMENDATIONS, true, false, false, null)
-    recommendationChannel.queuePurge(RabbitMQManager.Queues.RECOMMENDATIONS)
+    recommendationChannel.queueDeclare(TestMockManager.Queues.RECOMMENDATIONS, true, false, false, null)
+    recommendationChannel.queuePurge(TestMockManager.Queues.RECOMMENDATIONS)
     
     logger.info(s"Setting up recommendation listener for user: $testUserId")
     
@@ -104,7 +106,7 @@ class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
     
     // Store the consumer tag for cleanup
     consumerTag = recommendationChannel.basicConsume(
-      RabbitMQManager.Queues.RECOMMENDATIONS,
+      TestMockManager.Queues.RECOMMENDATIONS,
       false, // manual ack
       deliverCallback,
       cancelCallback

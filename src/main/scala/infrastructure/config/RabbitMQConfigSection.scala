@@ -5,11 +5,14 @@ import com.typesafe.config.ConfigFactory
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.Try
 import scala.collection.JavaConverters._
+import infrastructure.messaging.rabbitmq.RabbitMQManager
 
 /**
  * Typed RabbitMQ configuration section
  */
 class RabbitMQConfigSection(config: Config) extends ConfigSection {
+  private val logger = org.slf4j.LoggerFactory.getLogger(getClass)
+  
   private val rmqConfig = config.getConfig("rabbitmq")
   
   val host: String = rmqConfig.getString("host")

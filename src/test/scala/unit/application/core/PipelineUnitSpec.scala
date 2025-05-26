@@ -1,15 +1,15 @@
 package unit.pipeline
 
 import application.core.{Transformer, Recommender}
-import models._
-import org.scalatest.flatspec.AnyFlatSpec
+import domain.models._
+import common.base.UnitTestBase
 import org.scalatest.matchers.should.Matchers
 import scala.concurrent.{Future, Await, Promise}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
-import common.utils.MockDataManager
+import common.mocks.TestMockManager.MockDataManager
 
-class PipelineUnitSpec extends AnyFlatSpec with Matchers {
+class PipelineUnitSpec extends UnitTestBase {
 
   "The recommendation pipeline" should "flow events from transformer to recommender" in {
     // Create the test components with the new dependency chain

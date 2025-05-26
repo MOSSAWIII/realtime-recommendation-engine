@@ -1,8 +1,8 @@
 package unit.application.core
 
 import application.core.{Recommender, DataManager}
-import models._
-import org.scalatest.flatspec.AnyFlatSpec
+import domain.models._
+import common.base.UnitTestBase
 import org.scalatest.matchers.should.Matchers
 import scala.concurrent.{Future, Await}
 import scala.concurrent.duration._
@@ -10,7 +10,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
 
-class RecommenderSpec extends AnyFlatSpec with Matchers {
+class RecommenderSpec extends UnitTestBase {
   
   "Optimized Recommender" should "generate recommendations based on user history" in {
     // Create mock DataManager

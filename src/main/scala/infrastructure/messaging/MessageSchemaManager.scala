@@ -18,6 +18,7 @@ object MessageSchemaManager {
   val RECOMMENDATION_REQUEST_TYPE = "recommendation.request"
   val RECOMMENDATION_RESULT_TYPE = "recommendation.result"
   val HISTORICAL_DATA_TYPE = "historical.data"
+  val USER_PROFILE_TYPE = "user.profile"
   
   /**
    * Initialize schema registry with all message type schemas
@@ -40,7 +41,7 @@ object MessageSchemaManager {
         "timestamp" -> Json.obj("type" -> Json.fromString("integer"))
       )
     )
-    RabbitMQManager.registerSchema(USER_EVENT_TYPE, userEventSchema)
+    RabbitMQManager.registerSchema(USER_EVENT_TYPE, userEventSchema.noSpaces)
     
     // Register processed event schema
     val processedEventSchema = Json.obj(
@@ -60,7 +61,7 @@ object MessageSchemaManager {
         "processingTimestamp" -> Json.obj("type" -> Json.fromString("integer"))
       )
     )
-    RabbitMQManager.registerSchema(PROCESSED_EVENT_TYPE, processedEventSchema)
+    RabbitMQManager.registerSchema(PROCESSED_EVENT_TYPE, processedEventSchema.noSpaces)
     
     // Register recommendation request schema
     val recommendationRequestSchema = Json.obj(
@@ -79,7 +80,7 @@ object MessageSchemaManager {
         "limit" -> Json.obj("type" -> Json.fromString("integer"))
       )
     )
-    RabbitMQManager.registerSchema(RECOMMENDATION_REQUEST_TYPE, recommendationRequestSchema)
+    RabbitMQManager.registerSchema(RECOMMENDATION_REQUEST_TYPE, recommendationRequestSchema.noSpaces)
     
     // Register recommendation result schema
     val recommendationResultSchema = Json.obj(
@@ -106,7 +107,7 @@ object MessageSchemaManager {
         "generationTime" -> Json.obj("type" -> Json.fromString("integer"))
       )
     )
-    RabbitMQManager.registerSchema(RECOMMENDATION_RESULT_TYPE, recommendationResultSchema)
+    RabbitMQManager.registerSchema(RECOMMENDATION_RESULT_TYPE, recommendationResultSchema.noSpaces)
     
     // Register user profile schema
     val userSchema = Json.obj(
@@ -122,7 +123,7 @@ object MessageSchemaManager {
         "preferences" -> Json.obj("type" -> Json.fromString("object"))
       )
     )
-    RabbitMQManager.registerSchema(USER_PROFILE_TYPE, userSchema)
+    RabbitMQManager.registerSchema(USER_PROFILE_TYPE, userSchema.noSpaces)
     
     logger.info("All message schemas registered successfully")
   }
@@ -133,23 +134,23 @@ object MessageSchemaManager {
   def getRoutingKeyForMessage[T](messageType: String, message: T): String = {
     messageType match {
       case USER_EVENT_TYPE =>
-        val event = message.asInstanceOf[models.UserEvent]
+        val event = message.asInstanceOf[domain.models.UserEvent]
         s"event.raw.${event.eventType}.${event.userId}"
         
       case PROCESSED_EVENT_TYPE =>
-        val event = message.asInstanceOf[models.ProcessedEvent]
+        val event = message.asInstanceOf[domain.models.ProcessedEvent]
         s"event.processed.${event.eventType}.${event.userId}"
         
       case USER_PROFILE_TYPE =>
-        val user = message.asInstanceOf[models.User]
+        val user = message.asInstanceOf[domain.models.User]
         s"reference.user.${user.userId}"
         
       case RECOMMENDATION_REQUEST_TYPE =>
-        val request = message.asInstanceOf[models.RecommendationRequest]
+        val request = message.asInstanceOf[domain.models.RecommendationRequest]
         s"recommendation.request.${request.userId}"
         
       case RECOMMENDATION_RESULT_TYPE =>
-        val result = message.asInstanceOf[models.Recommendation]
+        val result = message.asInstanceOf[domain.models.Recommendation]
         s"recommendation.result.${result.userId}"
         
       case _ =>
@@ -164,7 +165,7 @@ object MessageSchemaManager {
   def calculatePriority[T](messageType: String, message: T): Option[Int] = {
     messageType match {
       case USER_EVENT_TYPE =>
-        val event = message.asInstanceOf[models.UserEvent]
+        val event = message.asInstanceOf[domain.models.UserEvent]
         // Higher priority for purchase events
         if (event.eventType == "purchase") Some(8)
         else if (event.eventType == "click") Some(5)

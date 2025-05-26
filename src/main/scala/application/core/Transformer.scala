@@ -239,11 +239,11 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
       
       // If this is an event with an item, trigger recommendation
       if (userEvent.itemId.isDefined) {
-        publishRecommendationRequest(RecommendationRequest(userEvent.userId, userEvent.itemId.get))
+        publishRecommendationRequest(RecommendationRequest(userEvent.userId, Some(userEvent.itemId.get)))
       }
       
       val processingTime = (System.nanoTime() - startTime) / 1000000 // Convert to milliseconds
-      messageProcessingTimer.record(processingTime)
+      messageProcessingTimer.recordMillis(processingTime)
       updateMetrics(processingTime)
       
       Future.successful(processedEvent)
@@ -263,7 +263,7 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
       userId = userEvent.userId,
       eventType = userEvent.eventType,
       itemId = userEvent.itemId,
-      timestamp = Instant.now(),
+      timestamp = Instant.now().toEpochMilli(),
       properties = userEvent.properties.getOrElse(Map.empty)
     )
   }

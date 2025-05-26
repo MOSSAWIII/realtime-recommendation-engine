@@ -1,12 +1,12 @@
 package unit.infrastructure.persistence
 
 import java.sql.{Connection, PreparedStatement, ResultSet}
-import models.Event
+import domain.models.Event
 import org.powermock.api.mockito.PowerMockito
 import org.powermock.core.classloader.annotations.PrepareForTest
 import org.scalatest.BeforeAndAfterEach
-import org.scalatest.funsuite.AnyFunSuite
-import repositories.EventRepository
+import common.base.UnitTestBase
+import application.core.EventRepository
 import scala.concurrent.ExecutionContext.Implicits.global
 import org.mockito.ArgumentMatchers
 import org.mockito.Mockito.{verify, when}
@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 
 @RunWith(classOf[PowerMockRunner])
 @PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
-class RepositorySpec extends AnyFunSuite with BeforeAndAfterEach {
+class RepositorySpec extends UnitTestBase with BeforeAndAfterEach {
 
   var mockConnection: Connection = _
   var mockPreparedStatement: PreparedStatement = _

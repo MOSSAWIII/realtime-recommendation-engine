@@ -17,7 +17,8 @@ libraryDependencies ++= Seq(
   "org.powermock" % "powermock-api-mockito2" % "2.0.9" % Test,
   "org.slf4j" % "slf4j-api" % "2.0.7",
   "org.junit.vintage" % "junit-vintage-engine" % "5.9.2" % Test,
-  "org.scalatestplus" %% "junit-4-13" % "3.2.15.0" % Test
+  "org.scalatestplus" %% "junit-4-13" % "3.2.15.0" % Test,
+  "com.typesafe.akka" %% "akka-actor" % "2.6.20"
 )
 
 enablePlugins(JavaAppPackaging)

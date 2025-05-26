@@ -2,8 +2,11 @@ package infrastructure.messaging.rabbitmq
 
 import com.rabbitmq.client.{Channel, Connection, ConnectionFactory}
 import com.typesafe.config.ConfigFactory
+import infrastructure.config.DatabaseConfig
+import infrastructure.messaging.rabbitmq.RabbitMQManager
+import infrastructure.config.RabbitMQConfigSection
 import org.slf4j.LoggerFactory
-
+import scala.collection.mutable
 import java.util.concurrent.ConcurrentHashMap
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
@@ -41,6 +44,18 @@ object RabbitMQManager {
     
     // Client to DataManager (historical data)
     val HISTORICAL_DATA = "historical.data.#"
+  }
+  
+  // Message schema registry
+  private val schemaRegistry = mutable.Map[String, String]()
+  
+  def registerSchema(messageType: String, schema: String): Unit = {
+    logger.info(s"Registering schema for message type: $messageType")
+    schemaRegistry.put(messageType, schema)
+  }
+
+  def getSchema(messageType: String): Option[String] = {
+    schemaRegistry.get(messageType)
   }
   
   /**

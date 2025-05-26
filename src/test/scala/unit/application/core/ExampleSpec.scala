@@ -1,7 +1,7 @@
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.UnitTestBase
 import org.scalatest.matchers.should.Matchers
 
-class ExampleSpec extends AnyFlatSpec with Matchers {
+class ExampleSpec extends UnitTestBase {
   "A simple test" should "verify that 1 + 1 equals 2" in {
     assert(1 + 1 == 2)
   }

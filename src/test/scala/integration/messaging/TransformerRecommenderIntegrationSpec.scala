@@ -1,18 +1,14 @@
 package integration.recommendation
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.BeforeAndAfterAll
+import common.base.IntegrationTestBase
 import application.core.{Transformer, Recommender}
-import repositories.Repository
-import models.{UserEvent, ProcessedEvent, Recommendation, RecommendedItem}
-import scala.concurrent.ExecutionContext.Implicits.global
+import domain.models.{UserEvent, ProcessedEvent, Recommendation, RecommendedItem}
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
-import common.utils.DatabaseConfig
+import common.mocks.TestRepository
 import org.slf4j.LoggerFactory
 
-class TransformerRecommenderIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
+class TransformerRecommenderIntegrationSpec extends IntegrationTestBase {
   
   private val logger = LoggerFactory.getLogger(getClass)
   var repository: TestRepository = _
@@ -20,6 +16,8 @@ class TransformerRecommenderIntegrationSpec extends AnyFlatSpec with Matchers wi
   var recommender: Recommender = _
   
   override def beforeAll(): Unit = {
+    super.beforeAll()
+    
     // Use a TestRepository instead of the real Repository
     repository = new TestRepository()
     transformer = new Transformer(repository)
@@ -36,6 +34,7 @@ class TransformerRecommenderIntegrationSpec extends AnyFlatSpec with Matchers wi
     if (recommender != null) {
       recommender.close()
     }
+    super.afterAll()
   }
   
   "Transformer and Recommender" should "work together to process events and generate recommendations" in {

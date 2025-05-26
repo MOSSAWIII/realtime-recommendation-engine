@@ -10,6 +10,7 @@ import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.{Failure, Success, Try}
 import org.slf4j.LoggerFactory
+import scala.reflect.ClassTag
 
 /**
  * Centralized configuration service that provides:
@@ -18,11 +19,11 @@ import org.slf4j.LoggerFactory
  * - Configuration change notifications
  * - JMX management operations
  */
-class ConfigurationService(initialConfig: Config = ConfigFactory.load()) {
+class ConfigurationService(private val config: Config = ConfigFactory.load()) {
   private val logger = LoggerFactory.getLogger(getClass)
   
   // Current loaded configuration
-  @volatile private var currentConfig = initialConfig
+  @volatile private var currentConfig = config
   
   // Scheduler for periodic config reload
   private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
@@ -61,6 +62,21 @@ class ConfigurationService(initialConfig: Config = ConfigFactory.load()) {
       sectionName, 
       _ => factory(currentConfig)
     ).asInstanceOf[T]
+  }
+
+  /**
+   * Récupère une section de configuration typée
+   */
+  def get[T: ClassTag]: T = {
+    val tag = implicitly[ClassTag[T]]
+    val constructor = tag.runtimeClass.getConstructors.head
+    
+    try {
+      constructor.newInstance(config).asInstanceOf[T]
+    } catch {
+      case e: Exception => 
+        throw new RuntimeException(s"Failed to instantiate configuration section ${tag.runtimeClass.getName}: ${e.getMessage}", e)
+    }
   }
 
   /**

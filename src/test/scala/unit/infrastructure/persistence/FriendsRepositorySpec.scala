@@ -1,6 +1,6 @@
 package unit.infrastructure.persistence
 
-import org.scalatest.flatspec.AnyFlatSpec
+import common.base.UnitTestBase
 import org.scalatest.matchers.should.Matchers
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
@@ -8,8 +8,8 @@ import org.powermock.api.mockito.PowerMockito
 import org.powermock.core.classloader.annotations.PrepareForTest
 import org.powermock.modules.junit4.PowerMockRunner
 import org.junit.runner.RunWith
-import repositories.FriendsRepository
-import models.{UserFriends, UserFriend}
+import application.core.FriendsRepository
+import domain.models.{UserFriends, UserFriend}
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import scala.concurrent.ExecutionContext.Implicits.global
 import common.utils._
@@ -17,7 +17,7 @@ import scala.concurrent.Future
 
 @RunWith(classOf[PowerMockRunner])
 @PrepareForTest(Array(classOf[config.DatabaseConfig.type]))
-class FriendsRepositoryBaseSpec extends AnyFlatSpec with Matchers {
+class FriendsRepositoryBaseSpec extends UnitTestBase {
   // Setup mock
   val mockConnection = PowerMockito.mock(classOf[Connection])
   PowerMockito.mockStatic(classOf[config.DatabaseConfig.type])

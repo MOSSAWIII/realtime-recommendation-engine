@@ -1,37 +1,35 @@
-package integration.data
+package integration.db
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import org.scalatest.BeforeAndAfterEach
-import common.utils.MockDataManager
-import models._
+import domain.models._
 import scala.concurrent.{Await, ExecutionContext}
 import scala.concurrent.duration._
+import common.base.IntegrationTestBase
+import common.mocks.TestMockManager.MockDataManager
+import common.fixtures.TestDataFactory
 
-class DataManagerIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach {
+class DataManagerIntegrationSpec extends IntegrationTestBase {
   
-  implicit val ec: ExecutionContext = ExecutionContext.global
   var dataManager: MockDataManager = _
   
   override def beforeEach(): Unit = {
-    // Initialiser un nouveau MockDataManager pour chaque test
+    super.beforeEach()
+    // Initialize a new MockDataManager for each test
     dataManager = new MockDataManager()
     
-    // Configurer des données de test
+    // Configure test data using TestDataFactory
+    val testUser = TestDataFactory.createUser(userId = 1L)
+    val testEvent = TestDataFactory.createEvent(id = Some(101L), createdBy = 1L)
+    val testProcessedEvent = TestDataFactory.createProcessedEvent(
+      id = Some(1L), userId = 1L, itemId = Some(101L)
+    )
+    val testFriendship = TestDataFactory.createUserFriend(userId = 1L, friendId = 2L)
+    
+    // Setup test data
     dataManager.setupMockData(
-      users = List(
-        User(userId = 1L, name = Some("User 1"), emailAddress = Some("user1@example.com"))
-      ),
-      events = List(
-        Event(id = Some(101L), name = "Event 1", startTime = System.currentTimeMillis(), createdBy = 1L, status = "active")
-      ),
-      processedEvents = List(
-        ProcessedEvent(id = Some(1L), userId = 1L, eventType = "view", itemId = Some(101L), 
-                       properties = Map("test" -> "true"), timestamp = System.currentTimeMillis())
-      ),
-      friendships = List(
-        UserFriend(userId = 1L, friendId = 2L, similarity = 0.8)
-      )
+      users = List(testUser),
+      events = List(testEvent),
+      processedEvents = List(testProcessedEvent),
+      friendships = List(testFriendship)
     )
   }
   
@@ -43,14 +41,7 @@ class DataManagerIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
   }
   
   it should "store and retrieve recommendations" in {
-    val recommendation = Recommendation(
-      id = None,
-      userId = 1L,
-      timestamp = System.currentTimeMillis(),
-      recommendedItems = List(
-        RecommendedItem(101L, 0.9, "Based on your recent activity")
-      )
-    )
+    val recommendation = TestDataFactory.createRecommendation(userId = 1L)
     
     val storedRecommendation = Await.result(dataManager.storeRecommendation(recommendation), 5.seconds)
     storedRecommendation.id shouldBe defined
@@ -65,6 +56,7 @@ class DataManagerIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
     if (dataManager != null) {
       dataManager.close()
     }
+    super.afterEach()
   }
 }
 
