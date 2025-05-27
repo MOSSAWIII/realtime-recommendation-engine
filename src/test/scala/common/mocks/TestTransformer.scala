@@ -5,11 +5,13 @@ import domain.models._
 import scala.concurrent.{Promise, Future, ExecutionContext}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import org.scalatest.matchers.should.Matchers
+import com.rabbitmq.client.Channel
 
 class TestTransformer(
   dataManager: DataManager,
   queueName: String = "test_queue",
-  processPromise: Promise[ProcessedEvent] = Promise[ProcessedEvent]()
+  processPromise: Promise[ProcessedEvent] = Promise[ProcessedEvent](),
+  channelMock: Option[Channel] = None
 )(implicit ec: ExecutionContext) extends Transformer(dataManager) with Matchers {
   
   private val latch = new CountDownLatch(1)

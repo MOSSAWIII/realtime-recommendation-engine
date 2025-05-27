@@ -22,16 +22,14 @@ class TransformerRecommenderMessagingSpec extends IntegrationTestBase {
     super.afterAll()
   }
   
-  "Transformer and Recommender" should {
-    "process messages end-to-end through RabbitMQ" in {
-      // Setup channels
-      val channel = TestMockManager.createChannel("test-publisher")
-      val recChannel = TestMockManager.createChannel("recommendations-consumer")
-      
-      // Declare queues
-      recChannel.queueDeclare(TestMockManager.Queues.RECOMMENDATIONS, true, false, false, null)
-      
-      // Test implementation...
-    }
+  "process messages end-to-end through RabbitMQ" should "work correctly" in {
+    // Setup channels
+    val channel = TestMockManager.createChannel("test-publisher")
+    val recChannel = TestMockManager.createChannel("recommendations-consumer")
+    
+    // Declare queues
+    recChannel.queueDeclare(TestMockManager.Queues.RECOMMENDATIONS, true, false, false, null)
+    
+    // Test implementation...
   }
 }

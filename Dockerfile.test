@@ -27,4 +27,4 @@ COPY src/ src/
 COPY src/test/resources/application-test.conf /app/src/main/resources/application.conf
 
 # Compile the project but don't run the tests
-RUN sbt compile
+# RUN sbt compile

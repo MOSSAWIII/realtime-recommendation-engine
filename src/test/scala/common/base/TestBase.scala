@@ -8,14 +8,25 @@ import org.scalatest.flatspec.AnyFlatSpec
 import scala.concurrent.ExecutionContext
 
 /**
- * Base trait for all test classes
+ * Base trait for all test classes providing common functionality.
+ * All test classes should extend one of the specialized traits below.
  */
 trait TestBase {
   implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global
 }
 
 /**
- * Base trait for unit tests using FlatSpec style
+ * Base trait for unit tests using FlatSpec style.
+ * Use for isolated component tests that don't require external dependencies.
+ * 
+ * Example usage:
+ * {{{
+ * class MyComponentSpec extends UnitTestBase {
+ *   "My component" should "do something" in {
+ *     // test code
+ *   }
+ * }
+ * }}}
  */
 trait UnitTestBase extends AnyFlatSpec with Matchers with BeforeAndAfterEach with TestBase
 
@@ -27,17 +38,8 @@ trait UnitWordSpecBase extends AnyWordSpec with Matchers with BeforeAndAfterEach
 /**
  * Base trait for integration tests
  */
-trait IntegrationTestBase extends AnyWordSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach with TestBase {
-  // Common setup/teardown for integration tests
-  override def beforeAll(): Unit = {
-    super.beforeAll()
-    // Common integration test setup
-  }
-  
-  override def afterAll(): Unit = {
-    // Common integration test cleanup
-    super.afterAll()
-  }
+trait IntegrationTestBase extends AnyFlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach with TestBase {
+  // Supprimé le code spécifique à l'environnement d'intégration - sera déplacé vers des classes spécialisées
 }
 
 /**

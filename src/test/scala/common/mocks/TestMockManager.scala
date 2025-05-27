@@ -4,6 +4,10 @@ import com.rabbitmq.client.{Channel, Connection, ConnectionFactory}
 import java.sql.{Connection => SqlConnection, PreparedStatement, ResultSet}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.collection.mutable.{Map => MutableMap, ListBuffer}
+import org.mockito.Mockito._
+import org.mockito.ArgumentMatchers._
+import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider}
+import com.typesafe.config.{Config, ConfigFactory}  // Ajout de Config
 import domain.models._
 import java.util.concurrent.CountDownLatch
 
@@ -44,7 +48,10 @@ object TestMockManager {
   }
   
   def mockRabbitMQChannel(): Channel = {
-    org.mockito.Mockito.mock(classOf[Channel])
+    val channel = mock(classOf[Channel])
+    // Correction: utilisation de doNothing() au lieu de thenReturn(null)
+    doNothing().when(channel).basicPublish(anyString(), anyString(), any(), any())
+    channel
   }
   
   def mockRabbitMQConnection(): Connection = {
@@ -59,13 +66,21 @@ object TestMockManager {
   }
   
   def createChannel(name: String): Channel = {
-    val channel = connection.fold(mockRabbitMQChannel())(_.createChannel())
+    if (channels.contains(name)) {
+      return channels(name)
+    }
+    
+    val channel = mock(classOf[Channel])
+    // Setup basic mocking
+    when(channel.isOpen).thenReturn(true)
+    doNothing().when(channel).basicPublish(anyString(), anyString(), any(), any())
+    
     channels.put(name, channel)
     channel
   }
   
-  def getChannel(name: String): Channel = {
-    channels.getOrElse(name, createChannel(name))
+  def getChannel(name: String): Option[Channel] = {
+    channels.get(name)
   }
   
   def closeChannel(name: String): Unit = {
@@ -80,7 +95,10 @@ object TestMockManager {
   }
   
   def closeAllChannels(): Unit = {
-    channels.keys.toList.foreach(closeChannel)
+    channels.foreach { case (_, channel) => 
+      try { channel.close() } catch { case _: Exception => }
+    }
+    channels.clear()
   }
   
   def cleanup(): Unit = {
@@ -90,8 +108,13 @@ object TestMockManager {
   }
   
   // ======= Mock DataManager =======
-  class MockDataManager(val latch: CountDownLatch = null)(implicit val ec: ExecutionContext) extends application.core.DataManager {
-    // Maps to store mock data
+  class MockDataManager(
+    val configService: infrastructure.config.ConfigurationServiceInterface = new MockConfigService(),
+    val dbProvider: infrastructure.config.DatabaseConfigProvider = new MockDatabaseProvider(),
+    val latch: CountDownLatch = null
+  )(implicit val ec: ExecutionContext) extends application.core.DataManager(configService, dbProvider) {
+    
+    // Maps pour stocker les données mockées
     private val mockEvents = MutableMap[Long, ListBuffer[ProcessedEvent]]()
     private val mockRecommendations = MutableMap[Long, Recommendation]()
     private val mockUsers = MutableMap[Long, User]()
@@ -128,16 +151,15 @@ object TestMockManager {
       friendships.foreach(addUserFriend)
     }
     
-    // DataManager implementation
-    override def start(): Unit = {}
+    // Implémentations de méthodes DataManager
+    def start(): Unit = {}
     override def close(): Unit = {}
     
     override def storeProcessedEvent(event: ProcessedEvent): Future[ProcessedEvent] = {
-      val userId = event.userId
-      if (!mockEvents.contains(userId)) {
-        mockEvents(userId) = ListBuffer[ProcessedEvent]()
+      if (!mockEvents.contains(event.userId)) {
+        mockEvents(event.userId) = ListBuffer[ProcessedEvent]()
       }
-      mockEvents[userId] += event
+      mockEvents(event.userId) += event
       
       if (latch != null) {
         latch.countDown()
@@ -178,5 +200,46 @@ object TestMockManager {
       Future.successful(mockRecommendations.get(userId))
     }
   }
+  
+  // Pour référencer la TestConfigurationService existante
+  def createMockConfigService(): TestConfigurationService = {
+    new TestConfigurationService()
+  }
+  
+  // Pour référencer le TestDatabaseProvider existant
+  def createMockDatabaseProvider(): TestDatabaseProvider = {
+    new TestDatabaseProvider()
+  }
+  
+  // Correction des types manquants
+  def createTestComponents(implicit ec: ExecutionContext) = {
+    val configService: infrastructure.config.ConfigurationServiceInterface = new MockConfigService()
+    val dbProvider: infrastructure.config.DatabaseConfigProvider = new MockDatabaseProvider()
+    
+    // Autres composants...
+    
+    (configService, dbProvider)
+  }
+}
+
+// Création des classes manquantes
+class MockConfigService extends infrastructure.config.ConfigurationServiceInterface {
+  // Implémentation minimale
+  override def getConfig: Config = com.typesafe.config.ConfigFactory.load()
+  
+  override def get[T <: infrastructure.config.ConfigSection](implicit converter: com.typesafe.config.Config => T): T = {
+    converter(getConfig)
+  }
+  
+  override def reload(): Boolean = true
+  
+  override def updateConfigValue(path: String, value: String): Boolean = true
+  
+  override def updateConfigValueGeneric(path: String, value: Any): Boolean = true
+}
+
+class MockDatabaseProvider extends infrastructure.config.DatabaseConfigProvider {
+  override def getConnection(): java.sql.Connection = mock(classOf[java.sql.Connection])
+  override def close(): Unit = {}
 }
 

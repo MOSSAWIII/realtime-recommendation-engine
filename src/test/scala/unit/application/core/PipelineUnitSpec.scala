@@ -1,116 +1,56 @@
-package unit.pipeline
+package unit.application.core
 
-import application.core.{Transformer, Recommender}
-import domain.models._
-import common.base.UnitTestBase
-import org.scalatest.matchers.should.Matchers
-import scala.concurrent.{Future, Await, Promise}
-import scala.concurrent.ExecutionContext.Implicits.global
+import application.core.{Transformer, Recommender, DataManager}
+import common.base.UnitSpec
+import common.mocks.MockDataManager
+import common.fixtures.TestDataFactory  // Ajout de l'import correct
+import domain.models.{UserEvent, Recommendation, RecommendationRequest, RecommendedItem}
+import scala.concurrent.{Future, Promise, Await}
 import scala.concurrent.duration._
-import common.mocks.TestMockManager.MockDataManager
+import org.mockito.Mockito._
+import org.mockito.ArgumentMatchers.any
+import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.concurrent.atomic.AtomicReference
+import org.scalatest.concurrent.ScalaFutures
 
-class PipelineUnitSpec extends UnitTestBase {
-
+class PipelineUnitSpec extends UnitSpec with ScalaFutures {
+  
   "The recommendation pipeline" should "flow events from transformer to recommender" in {
-    // Create the test components with the new dependency chain
-    val mockDataManager = new MockDataManager()
-    val mockRecommender = new MockRecommender(mockDataManager)
-    val transformer = new MockTransformer(mockDataManager, mockRecommender)
+    // Arrange
+    val mockDataManager = spy(new MockDataManager())
+    val transformer = new Transformer(mockDataManager)
+    val recommender = new Recommender(mockDataManager)
     
-    // Test event
-    val testEvent = UserEvent(
-      userId = 123L,
-      eventType = "view",
-      itemId = Some(456L),
-      properties = Some(Map("test" -> "value")),
-      timestamp = System.currentTimeMillis()
-    )
+    // Créer une variable mutable pour capturer la recommandation
+    val recommenderReceived = new AtomicReference[Recommendation]()
     
-    // Process the event directly through the transformer
-    transformer.processEvent(testEvent)
+    // Utiliser Mockito pour intercepter l'appel à storeRecommendation
+    doAnswer { invocation =>
+      val rec = invocation.getArgument[Recommendation](0)
+      recommenderReceived.set(rec)
+      Future.successful(rec)
+    }.when(mockDataManager).storeRecommendation(any[Recommendation])
     
-    // Verify transformer processed the event
-    transformer.processedEvents should contain(testEvent)
+    // Act
+    // Créer et traiter un événement utilisateur
+    val userEvent = TestDataFactory.createUserEvent(userId = 123L)
+    val processedEventFuture = transformer.processEvent(userEvent)
     
-    // Verify recommender generated recommendations for this user
-    val recommendations = Await.result(mockRecommender.recommendationsPromise.future, 2.seconds)
-    recommendations.userId shouldBe testEvent.userId
-    recommendations.recommendedItems.nonEmpty shouldBe true
-  }
-  
-  // Mock classes for testing the pipeline flow
-  class MockTransformer(dataManager: MockDataManager, recommender: MockRecommender) extends Transformer(dataManager) {
-    var processedEvents: List[UserEvent] = List.empty
+    // Utiliser Await.result au lieu de futureValue
+    val processedEvent = Await.result(processedEventFuture, 5.seconds)
     
-    override def processEvent(event: UserEvent): Future[ProcessedEvent] = {
-      processedEvents = event :: processedEvents
-      
-      val processedEvent = ProcessedEvent(
-        id = Some(1L),
-        userId = event.userId,
-        eventType = event.eventType,
-        itemId = event.itemId,
-        properties = event.properties.getOrElse(Map.empty),
-        timestamp = event.timestamp
-      )
-      
-      // Store event in dataManager
-      val future = dataManager.storeProcessedEvent(processedEvent)
-      
-      // Trigger recommendation request
-      future.foreach { _ =>
-        recommender.recommendForUser(RecommendationRequest(
-          userId = event.userId,
-          itemId = event.itemId.getOrElse(-1L),
-          context = "test"
-        ))
-      }
-      
-      future
+    // Attendre que la recommandation soit générée
+    Thread.sleep(500) // Attendre un peu pour le traitement asynchrone
+    
+    // Assert
+    // Vérifier la recommandation
+    val recommendationResult = recommenderReceived.get()
+    recommendationResult should not be null
+    
+    // Pour un test plus spécifique
+    if (recommendationResult != null) {
+      recommendationResult.userId shouldBe 123L
     }
-    
-    override def publishProcessedEvent(event: ProcessedEvent): Unit = {
-      // Do nothing in mock
-    }
-    
-    override def publishRecommendationRequest(request: RecommendationRequest): Unit = {
-      // Directly call recommender for unit testing
-      recommender.recommendForUser(request)
-    }
-    
-    // Override methods that would interact with RabbitMQ
-    override protected def setupPublishChannel() = null
-    override def start(): Unit = {}
-    override def close(): Unit = {}
-  }
-  
-  class MockRecommender(dataManager: MockDataManager) extends Recommender(dataManager) {
-    var recommendationsPromise: Promise[Recommendation] = Promise[Recommendation]()
-    
-    override def recommendForUser(request: RecommendationRequest): Future[Recommendation] = {
-      // Create sample recommendation
-      val recommendation = Recommendation(
-        id = None,
-        userId = request.userId,
-        timestamp = System.currentTimeMillis(),
-        recommendedItems = List(
-          RecommendedItem(request.itemId, 0.9, "Test reason 1"),
-          RecommendedItem(request.itemId + 1, 0.8, "Test reason 2")
-        )
-      )
-      
-      // Complete the promise with this recommendation
-      if (!recommendationsPromise.isCompleted) {
-        recommendationsPromise.success(recommendation)
-      }
-      
-      // Store and return
-      dataManager.storeRecommendation(recommendation)
-      Future.successful(recommendation)
-    }
-    
-    override def start(): Unit = {}
-    override def close(): Unit = {}
   }
 }
 

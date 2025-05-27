@@ -1,14 +1,16 @@
 package integration.recommendation
 
 import common.base.IntegrationTestBase
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import domain.models.{ProcessedEvent, User, UserFriend, Event, Recommendation, RecommendationRequest}
 import application.core.Recommender
-import application.core.Repository
+import application.core.DataManager
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
 import org.slf4j.LoggerFactory
+import common.mocks.TestRepository
 
 class ContextualRecommendationSpec extends AnyFlatSpec with Matchers {
   private val logger = LoggerFactory.getLogger(getClass)

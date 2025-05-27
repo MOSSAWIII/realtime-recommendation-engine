@@ -4,12 +4,18 @@ import application.core.DataManager
 import domain.models._
 import scala.concurrent.{ExecutionContext, Future}
 import org.slf4j.LoggerFactory
+import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider}
 
-class TestRepository(implicit override val ec: ExecutionContext = scala.concurrent.ExecutionContext.global) extends DataManager {
+class TestRepository(
+  val configService: ConfigurationServiceInterface = new common.mocks.TestConfigurationService(),
+  val dbProvider: DatabaseConfigProvider = new common.mocks.TestDatabaseProvider()
+)(implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global) 
+  extends DataManager(configService, dbProvider) {
+  
   private val logger = LoggerFactory.getLogger(getClass)
   
   // Délégation à MockDataManager pour rester compatible avec l'ancien code
-  private val mockDataManager = new MockDataManager()
+  private val mockDataManager = new MockDataManager(configService, dbProvider)
   
   // Support pour les anciennes données mockées
   var mockUserProfile: Option[User] = None
@@ -35,7 +41,7 @@ class TestRepository(implicit override val ec: ExecutionContext = scala.concurre
   }
   
   // Méthodes DataManager déléguées à MockDataManager
-  override def start(): Unit = {
+  def start(): Unit = {
     migrateData()
     mockDataManager.start()
   }

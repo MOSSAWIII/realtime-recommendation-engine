@@ -3,7 +3,7 @@ package application.core
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import domain.models._
 import infrastructure.messaging.rabbitmq.RabbitMQManager
-import infrastructure.config.{DataManagerConfigSection, ConfigurationService}
+import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider}
 import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback}
 import io.circe.parser.decode
 import io.circe.generic.auto._
@@ -23,20 +23,17 @@ import java.time.Instant
  * DataManager component responsible for all data access operations.
  * Single access point for all database operations, consolidating all repository functionality.
  */
-class DataManager(configService: ConfigurationService = new ConfigurationService())(implicit ec: ExecutionContext) {
+class DataManager(
+  configService: ConfigurationServiceInterface,
+  dbProvider: DatabaseConfigProvider
+)(implicit ec: ExecutionContext) {
   private val logger = LoggerFactory.getLogger(getClass)
   private val componentName = "data-manager"
   private val initialized = new AtomicBoolean(false)
   private val isShutdown = new AtomicBoolean(false)
   
-  // Config
-  private val dbConfig = configService.get[DataManagerConfigSection]
-  
-  // Connection pool
-  private lazy val dataSource: HikariDataSource = createDataSource()
-  
-  // Transaction manager for database operations
-  private val txManager = new DataManagerTransactions(this)
+  // Gestionnaire de transactions
+  private val txManager = new DataManagerTransactions(this)(ec)
   
   // RabbitMQ channels
   private var historicalDataChannel: Option[Channel] = None
@@ -108,8 +105,8 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
   // Cache mechanism
   private case class CacheEntry[T](value: T, expiration: Long)
   private val cache = scala.collection.concurrent.TrieMap[String, CacheEntry[Any]]()
-  private val DefaultCacheTTL = dbConfig.defaultCacheTTL
-  private val ShortCacheTTL = dbConfig.shortCacheTTL
+  private val DefaultCacheTTL = 30.minutes
+  private val ShortCacheTTL = 5.minutes
   private val LongCacheTTL = 30.minutes
 
   // Helper methods for caching
@@ -145,12 +142,22 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
   }
   
   // Méthodes utilitaires pour les opérations SQL
-  private def withPreparedStatement[T](connection: Connection, sql: String)(f: PreparedStatement => T): T = {
-    val stmt = connection.prepareStatement(sql)
+  /**
+   * Helper method to execute operations with a prepared statement and clean up resources
+   */
+  private def withPreparedStatement[T](conn: Connection, sql: String)(f: PreparedStatement => T): T = {
+    var stmt: PreparedStatement = null
     try {
+      stmt = conn.prepareStatement(sql)
       f(stmt)
     } finally {
-      stmt.close()
+      if (stmt != null) {
+        try {
+          stmt.close()
+        } catch {
+          case e: SQLException => logger.warn(s"Error closing prepared statement: ${e.getMessage}")
+        }
+      }
     }
   }
 
@@ -163,22 +170,13 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
     }
   }
   
-  /**
-   * Crée et configure une source de données HikariCP
-   */
-  private def createDataSource(): HikariDataSource = {
-    val hikariConfig = new HikariConfig()
-    hikariConfig.setJdbcUrl(dbConfig.jdbcUrl)
-    hikariConfig.setUsername(dbConfig.username)
-    hikariConfig.setPassword(dbConfig.password)
-    hikariConfig.setMaximumPoolSize(dbConfig.maxPoolSize)
-    hikariConfig.setMinimumIdle(dbConfig.minIdle)
-    hikariConfig.setIdleTimeout(dbConfig.idleTimeout)
-    hikariConfig.setConnectionTimeout(dbConfig.connectionTimeout)
-    hikariConfig.setMaxLifetime(dbConfig.maxLifetime)
-    hikariConfig.setPoolName("recommendation-engine-pool")
-    
-    new HikariDataSource(hikariConfig)
+  private def withConnection[T](f: Connection => T): T = {
+    val conn = getConnection()
+    try {
+      f(conn)
+    } finally {
+      conn.close()
+    }
   }
   
   /**
@@ -187,11 +185,57 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
   def getConnection(): Connection = {
     connectionUsageCounter.inc()
     try {
-      dataSource.getConnection()
+      dbProvider.getConnection()
     } catch {
       case e: SQLException =>
         connectionErrorCounter.inc()
         throw DatabaseException(s"Failed to get database connection: ${e.getMessage}", e)
+    }
+  }
+  
+  // Ajouter cette méthode à la classe DataManager
+
+  /**
+   * Exécute une opération de base de données avec une gestion d'erreur et des métriques
+   * @param operation La fonction à exécuter qui retourne un Future
+   * @return Future avec le résultat ou une DatabaseException en cas d'échec
+   */
+  private def withErrorHandling[T](operation: => Future[T]): Future[T] = {
+    try {
+      val startTime = System.currentTimeMillis()
+      val future = operation
+      
+      future.onComplete {
+        case Success(_) =>
+          val duration = System.currentTimeMillis() - startTime
+          // Enregistrer la métrique de durée d'opération
+        case Failure(e) =>
+          dataLoadErrorCounter.inc()
+          logger.error(s"Operation failed: ${e.getMessage}", e)
+      }
+      
+      future.recoverWith {
+        case e: SQLException =>
+          Future.failed(DatabaseException(
+            s"Database operation failed: ${e.getMessage}", 
+            e, 
+            Map("component" -> componentName)
+          ))
+        case e: Exception =>
+          Future.failed(DatabaseException(
+            s"Unexpected error during database operation: ${e.getMessage}", 
+            e, 
+            Map("component" -> componentName)
+          ))
+      }
+    } catch {
+      case e: Exception =>
+        dataLoadErrorCounter.inc()
+        Future.failed(DatabaseException(
+          s"Failed to execute operation: ${e.getMessage}", 
+          e, 
+          Map("component" -> componentName)
+        ))
     }
   }
   
@@ -1119,6 +1163,103 @@ class DataManager(configService: ConfigurationService = new ConfigurationService
       
       logger.info("Database tables initialized")
       ()
+    }
+  }
+
+  /**
+   * Perform a health check on the DataManager component
+   * @return true if all connections and resources are available, false otherwise
+   */
+  def healthCheck(): Boolean = {
+    try {
+      // Vérifier l'accès à la base de données
+      val dbConnectionOk = isDatabaseAccessible()
+      
+      // Vérifier l'accès au cache si applicable
+      val cacheAccessOk = isCacheAccessible()
+      
+      // Autres vérifications spécifiques au DataManager
+      // ...
+      
+      dbConnectionOk && cacheAccessOk
+    } catch {
+      case e: Exception =>
+        logger.error(s"DataManager health check failed: ${e.getMessage}", e)
+        false
+    }
+  }
+
+  /**
+   * Check if database is accessible
+   * @return true if database is accessible, false otherwise
+   */
+  def isDatabaseAccessible(): Boolean = {
+    try {
+      withConnection { conn =>
+        withPreparedStatement(conn, "SELECT 1") { ps =>
+          val rs = ps.executeQuery()
+          rs.next() // Si ça fonctionne, la base est accessible
+        }
+      }
+      true
+    } catch {
+      case e: Exception =>
+        logger.warn(s"Database not accessible: ${e.getMessage}")
+        false
+    }
+  }
+
+  /**
+   * Check if cache is accessible
+   * @return true if cache is accessible, false otherwise
+   */
+  def isCacheAccessible(): Boolean = {
+    try {
+      // Vérifier l'accès au cache si applicable
+      true // Remplacer par l'implémentation réelle
+    } catch {
+      case e: Exception =>
+        logger.warn(s"Cache not accessible: ${e.getMessage}")
+        false
+    }
+  }
+
+  /**
+   * Ferme les ressources du DataManager
+   * Alias pour shutdown() pour compatibilité avec les tests
+   */
+  def close(): Unit = shutdown()
+
+  /**
+   * Arrête proprement le DataManager et libère toutes les ressources
+   */
+  def shutdown(): Unit = {
+    if (isShutdown.compareAndSet(false, true)) {
+      logger.info("Shutting down DataManager...")
+      
+      // Fermeture du gestionnaire de transactions
+      txManager.close()
+      
+      // Fermer les canaux RabbitMQ
+      if (historicalDataChannel.isDefined) {
+        try {
+          historicalDataChannel.get.close()
+        } catch {
+          case e: Exception => logger.warn(s"Error closing historical data channel: ${e.getMessage}", e)
+        }
+      }
+      
+      if (recommenderSyncChannel.isDefined) {
+        try {
+          recommenderSyncChannel.get.close()
+        } catch {
+          case e: Exception => logger.warn(s"Error closing recommender sync channel: ${e.getMessage}", e)
+        }
+      }
+      
+      // Autres nettoyages...
+      
+      logger.info("DataManager shutdown complete")
     }
   }
 }

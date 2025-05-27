@@ -39,6 +39,9 @@ class RabbitMQConfigSection(config: Config) extends ConfigSection {
   
   val connectionRetries: Int = 
     if (rmqConfig.hasPath("connectionRetries")) rmqConfig.getInt("connectionRetries") else 3
+
+  val publisherConfirmEnabled: Boolean =
+    if (rmqConfig.hasPath("publisher.confirm")) rmqConfig.getBoolean("publisher.confirm") else false
   
   // Exchange configuration
   val exchanges: Map[String, ExchangeConfig] = {

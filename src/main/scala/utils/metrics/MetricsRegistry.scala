@@ -1,6 +1,6 @@
 package utils.metrics
 
-import java.util.concurrent.{ConcurrentHashMap, TimeUnit, Executors, ScheduledExecutorService}
+import java.util.concurrent.{ConcurrentHashMap, TimeUnit, Executors, ScheduledExecutorService, ConcurrentLinkedQueue}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 import scala.collection.mutable.{Map => MutableMap}
 import scala.collection.JavaConverters._
@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory
 import infrastructure.config.ConfigurationService
 import infrastructure.config.MetricsConfigSection
 import java.lang.management.{ManagementFactory, MemoryMXBean, MemoryUsage}
+import scala.concurrent.{ExecutionContext, Future}
 
 /**
  * Core metric types
@@ -71,7 +72,7 @@ class Timer(
   private val maxTime = new AtomicLong(0)
   private val sumSquares = new AtomicLong(0) // For standard deviation calculation
   
-  private val recentTimes = new java.util.concurrent.ConcurrentLinkedQueue[Long]()
+  private val recentTimes = new ConcurrentLinkedQueue[Long]()
   private val maxRecentSamples = 100 // Keep last 100 samples for moving average
   
   def recordNanos(durationNanos: Long): Unit = {
@@ -104,6 +105,26 @@ class Timer(
     } finally {
       val durationNanos = System.nanoTime() - start
       recordNanos(durationNanos)
+    }
+  }
+  
+  def timeWithContext[T, C](context: C)(block: => T): (T, C) = {
+    val start = System.nanoTime()
+    try {
+      val result = block
+      (result, context)
+    } finally {
+      val durationNanos = System.nanoTime() - start
+      recordNanos(durationNanos)
+    }
+  }
+  
+  def timeFuture[T](future: Future[T])(implicit ec: ExecutionContext): Future[T] = {
+    val start = System.nanoTime()
+    future.transform { result =>
+      val durationNanos = System.nanoTime() - start
+      recordNanos(durationNanos)
+      result
     }
   }
   

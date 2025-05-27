@@ -1,15 +1,16 @@
-package common.utils
+package common.mocks
 
-import com.dimafeng.testcontainers.{GenericContainer}
+import com.dimafeng.testcontainers.SingleContainer
 import org.testcontainers.containers.{RabbitMQContainer => JavaRabbitMQContainer}
 
-// Wrapper pour RabbitMQContainer de TestContainers
-class RabbitMQContainer(imageName: String) extends GenericContainer(
-  new JavaRabbitMQContainer(imageName)
-) {
-  // Accéder au conteneur sous-jacent via la méthode container disponible dans GenericContainer
-  def getAmqpUrl: String = container.asInstanceOf[JavaRabbitMQContainer].getAmqpUrl
-  def getAdminUsername: String = container.asInstanceOf[JavaRabbitMQContainer].getAdminUsername
-  def getAdminPassword: String = container.asInstanceOf[JavaRabbitMQContainer].getAdminPassword
-  def getMappedPort(port: Int): Int = container.asInstanceOf[JavaRabbitMQContainer].getMappedPort(port)
+class RabbitMQContainer(image: String = "rabbitmq:3-management") 
+  extends SingleContainer[JavaRabbitMQContainer] {
+  
+  override val container: JavaRabbitMQContainer = new JavaRabbitMQContainer(image)
+  
+  def getHost: String = container.getHost
+  def getAmqpPort: Int = container.getAmqpPort
+  def getHttpPort: Int = container.getHttpPort
+  def getAmqpUrl: String = container.getAmqpUrl
+  def getMappedPort(port: Int): Int = container.getMappedPort(port)
 }

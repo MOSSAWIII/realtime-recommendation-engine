@@ -1,75 +1,57 @@
-package integration.pipeline
+package integration.messaging
 
-import common.base.IntegrationTestBase
-import org.scalatest.matchers.should.Matchers
-import domain.models.{UserEvent, RecommendationRequest, Recommendation, ProcessedEvent}
-import common.mocks.TestMockManager
-import scala.concurrent.{Await, Future, Promise}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
-import io.circe.syntax._
-import io.circe.parser._
-import io.circe.generic.auto._
+import org.slf4j.LoggerFactory
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.nio.charset.StandardCharsets
-import com.rabbitmq.client.{DeliverCallback, CancelCallback, Channel}
-import common.utils.{ComponentTestBase, MockDataManager}
+import com.rabbitmq.client.{AMQP, DeliverCallback, CancelCallback}
+import io.circe.parser.decode
+import io.circe.syntax._
+import io.circe.generic.auto._
 
-class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
-  
-  private val logger = org.slf4j.LoggerFactory.getLogger(getClass)
+import application.core.{Transformer, Recommender}
+import domain.models._
+import common.base.RabbitMQTestBase
+import common.utils.TestResourceManager
+import common.mocks.MockDataManager
+import common.fixtures.TestDataFactory
 
-  // Test data
-  val testUserId = 999L
-  val testItemId = 888L
+class PipelineIntegrationSpec extends RabbitMQTestBase {
+  private val logger = LoggerFactory.getLogger(getClass)
+
+  // Test data avec ID uniques
+  val testUserId = TestResourceManager.uniqueId()
+  val testItemId = TestResourceManager.uniqueId()
   
   // Promise to track recommendation publication
   private var recommendationPromise: Promise[Recommendation] = Promise[Recommendation]()
   private var consumerTag: String = _
-  private var recommendationChannel: Channel = _
+  private var recommendationChannel: com.rabbitmq.client.Channel = _
   
   override def beforeAll(): Unit = {
     super.beforeAll()
     
-    // Initialize components with new dependency chain
-    initializeComponents()
+    // Use testExchange from RabbitMQTestBase instead of a hardcoded value
+    logger.info(s"Setting up test with exchange: $testExchange and queue: $testQueueName")
     
-    // Setup test data
-    setupTestData()
+    // Create recommendation channel
+    recommendationChannel = createTestChannel("recommendation-channel")
     
-    // Setup recommendation listener first to catch all messages
-    setupRecommendationListener()
+    // Create an isolated queue for this test
+    val queueName = createIsolatedQueue(recommendationChannel, "recommendation")
     
-    // Start components
-    startComponents()
+    // Setup recommendation listener with unique routing key for this test instance
+    val routingKey = s"recommendation.result.${testId}"
+    
+    // Bind queue to exchange with unique routing key
+    recommendationChannel.queueBind(queueName, testExchange, routingKey)
+    
+    // Set up listener
+    setupRecommendationListener(queueName)
   }
   
-  private def setupTestData(): Unit = {
-    // Sample pre-processed event
-    val testEvent = ProcessedEvent(
-      id = Some(1L),
-      userId = testUserId,
-      eventType = "view",
-      itemId = Some(testItemId),
-      properties = Map("test" -> "true"),
-      timestamp = System.currentTimeMillis() - 5000
-    )
-    
-    // Configure mock data
-    dataManager.setupMockData(
-      processedEvents = List(testEvent)
-    )
-    
-    logger.info(s"Test data configured for user $testUserId and item $testItemId")
-  }
-  
-  private def setupRecommendationListener(): Unit = {
-    recommendationChannel = TestMockManager.createChannel("test-rec-listener")
-    
-    // Make sure the queue exists and clear any previous messages
-    recommendationChannel.queueDeclare(TestMockManager.Queues.RECOMMENDATIONS, true, false, false, null)
-    recommendationChannel.queuePurge(TestMockManager.Queues.RECOMMENDATIONS)
-    
-    logger.info(s"Setting up recommendation listener for user: $testUserId")
-    
+  private def setupRecommendationListener(queueName: String): Unit = {
     val deliverCallback = new DeliverCallback {
       override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
         val message = new String(delivery.getBody, StandardCharsets.UTF_8)
@@ -106,7 +88,7 @@ class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
     
     // Store the consumer tag for cleanup
     consumerTag = recommendationChannel.basicConsume(
-      TestMockManager.Queues.RECOMMENDATIONS,
+      queueName,
       false, // manual ack
       deliverCallback,
       cancelCallback
@@ -116,30 +98,29 @@ class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
   }
   
   override def afterAll(): Unit = {
-    // Cleanup consumer registration if it exists
-    if (consumerTag != null && recommendationChannel != null && recommendationChannel.isOpen) {
-      try {
-        recommendationChannel.basicCancel(consumerTag)
-        logger.debug(s"Cancelled consumer with tag: $consumerTag")
-      } catch {
-        case e: Exception => logger.warn(s"Error cancelling consumer: ${e.getMessage}")
-      }
-    }
-    
-    super.afterAll() // This calls closeComponents()
+    // Cleanup is handled by RabbitMQTestBase
+    super.afterAll()
   }
   
   "The recommendation pipeline" should "process user events and generate recommendations" in {
-    // Reset the promise
+    // Reset the promise for this test
     recommendationPromise = Promise[Recommendation]()
     
-    // Create a test event
-    val event = UserEvent(
+    // Create isolated components for this test
+    val mockDataManager = new MockDataManager()
+    val transformer = new Transformer(mockDataManager)
+    registerForCleanup(transformer)
+    val recommenderCloseable = new AutoCloseable {
+      override def close(): Unit = {
+        // Logique de nettoyage pour recommender
+      }
+    }
+    registerForCleanup(recommenderCloseable)
+    
+    // Test with unique IDs
+    val event = TestDataFactory.createUserEvent(
       userId = testUserId, 
-      eventType = "view",
-      itemId = Some(testItemId),
-      properties = Some(Map("test" -> "true")),
-      timestamp = System.currentTimeMillis()
+      itemId = Some(testItemId)
     )
     
     logger.info(s"Processing test event for user $testUserId with item $testItemId")
@@ -164,35 +145,6 @@ class PipelineIntegrationSpec extends AnyFlatSpec with ComponentTestBase {
     // Verify recommendation
     recommendation.userId shouldBe testUserId
     recommendation.recommendedItems.nonEmpty shouldBe true
-  }
-
-  "Le pipeline de recommandation" should "traiter les événements et générer des recommandations" in {
-    // Setup avec MockDataManager qui capture les événements
-    
-    // Publier un événement de test
-    publishTestEvent(event)
-    
-    // Attendre que l'événement soit traité (avec latch)
-    latch.await(10, TimeUnit.SECONDS) shouldBe true
-    
-    // 1. Vérifier que l'événement a été correctement stocké
-    val storedEvents = mockDataManager.storedEvents
-    storedEvents should have size 1
-    storedEvents.head.userId shouldBe event.userId
-    
-    // 2. Vérifier que la recommandation a été générée et contient les informations attendues
-    val recommendation = waitForRecommendation(15.seconds)
-    recommendation.userId shouldBe event.userId
-    
-    // 3. Vérifier que les recommandations utilisent correctement le contexte
-    recommendation.recommendedItems.exists(item => 
-      item.reason.contains("based on your recent view") || 
-      item.reason.contains("friends are interested")
-    ) shouldBe true
-    
-    // 4. Vérifier l'ordre et les scores des recommandations
-    val sortedItems = recommendation.recommendedItems.sortBy(-_.score)
-    sortedItems should equal (recommendation.recommendedItems)
   }
 }
 

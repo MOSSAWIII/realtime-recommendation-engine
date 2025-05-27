@@ -6,14 +6,15 @@ import java.util.UUID
 import scala.util.Random
 
 /**
- * Centralized factory for generating test data
+ * Fabrique centralisée pour la génération de données de test
  */
 object TestDataFactory {
-  // Unique ID generators
-  def uniqueId(): Long = System.currentTimeMillis()
+  // Fonctions de génération d'ID uniques
+  def uniqueId(): Long = System.currentTimeMillis() + scala.util.Random.nextInt(1000000)
   def uniqueString(): String = UUID.randomUUID().toString
   
-  // Create test users
+  // Méthodes d'usine améliorées avec des identifiants uniques par défaut
+  
   def createUser(
     id: Long = uniqueId(),
     name: String = s"User ${uniqueId()}",
@@ -38,7 +39,6 @@ object TestDataFactory {
     )
   }
   
-  // Create test events
   def createEvent(
     id: Option[Long] = Some(uniqueId()), 
     name: String = s"Event ${uniqueId()}", 
@@ -68,14 +68,14 @@ object TestDataFactory {
     userId: Long = uniqueId(), 
     eventType: String = "view", 
     itemId: Option[Long] = Some(uniqueId()),
-    properties: Option[Map[String, String]] = Some(Map("test" -> "true")),
+    properties: Map[String, String] = Map("test" -> "true"),
     timestamp: Long = System.currentTimeMillis()
   ): UserEvent = {
     UserEvent(
       userId = userId,
       eventType = eventType,
       itemId = itemId,
-      properties = properties,
+      properties = Some(properties),  // Adapter si properties est Optional dans UserEvent
       timestamp = timestamp
     )
   }
@@ -134,6 +134,36 @@ object TestDataFactory {
     )
   }
   
+  def createRecommendationItem(
+    itemId: Long,
+    score: Double,
+    reason: Option[String] = None,
+    itemType: String = "event"
+  ): RecommendationItem = {
+    RecommendationItem(
+      itemId = itemId,
+      score = score,
+      reason = reason.getOrElse(""),
+      itemType = itemType
+    )
+  }
+
+  import domain.models.RecommendationItem
+
+  def createRecommendationItem(
+    itemIdValue: Long,
+    scoreValue: Double,
+    reasonValue: String,
+    itemTypeValue: String
+  ): RecommendationItem = {
+    RecommendationItem(
+      itemId = itemIdValue,
+      score = scoreValue,
+      reason = reasonValue,
+      itemType = itemTypeValue
+    )
+  }
+  
   // Create test user friends
   def createUserFriend(
     userId: Long = uniqueId(),
@@ -143,15 +173,15 @@ object TestDataFactory {
     UserFriend(
       userId = userId,
       friendId = friendId,
-      similarity = similarity
+      strength = similarity
     )
   }
   
-  // Create a complete test dataset
-  def createTestDataset(
-    userCount: Int = 5,
-    eventsPerUser: Int = 3,
-    friendsPerUser: Int = 2
+  // Méthodes pour créer des jeux de données complets pour les tests
+  def createCompleteDataset(
+    userCount: Int = 10,
+    eventsPerUser: Int = 5,
+    friendsPerUser: Int = 3
   ): TestDataset = {
     // Create users
     val users = (1 to userCount).map(_ => createUser()).toList
@@ -196,7 +226,6 @@ object TestDataFactory {
     )
   }
   
-  // Container for a complete test dataset
   case class TestDataset(
     users: List[User],
     events: List[Event],

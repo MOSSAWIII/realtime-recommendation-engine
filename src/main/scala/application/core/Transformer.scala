@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentSkipListMap
  * Transformer component that processes user events and publishes them to appropriate queues.
  * Handles both consuming events from user_actions_exchange and publishing to processed_events_queue.
  */
-class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
+class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) extends AutoCloseable {
   private val logger = LoggerFactory.getLogger(getClass)
   private val componentName = "transformer"
   
@@ -55,6 +55,17 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
     "Total number of messages received"
   )
   
+  // Additional metrics from StreamingConsumer
+  private val streamingMessagesProcessedCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "streaming", "processed"),
+    "Total number of streaming messages successfully processed"
+  )
+  
+  private val streamingMessageErrorsCounter = MetricsRegistry.buildCounter(
+    MetricsRegistry.MetricMetadata(componentName, "streaming", "errors"),
+    "Total number of streaming message processing errors"
+  )
+  
   // Register health checks
   registerHealthChecks()
   
@@ -62,6 +73,10 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
   private val publishChannel = setupPublishChannel()
   private var consumeChannel: Channel = _
   private var consumerTag: String = _
+  
+  // Additional streaming consumer channel
+  private var streamingConsumerChannel: Channel = _
+  private var streamingConsumerTag: String = _
   
   // Maps for tracking published messages for publisher confirms
   private val outstandingConfirms = new ConcurrentSkipListMap[Long, ProcessedEvent]()
@@ -157,11 +172,26 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
   }
 
   /**
-   * Start the transformer consumer to listen for user events
+   * Start the transformer consumer to listen for user events.
+   * This method now incorporates both the original Transformer consumer
+   * and the StreamingConsumer functionality.
    */
   def start(): Unit = {
     logger.info("Starting Transformer consumer...")
     
+    // Start the original transformer consumer
+    startOriginalConsumer()
+    
+    // Start the streaming consumer (previously in StreamingConsumer)
+    startStreamingConsumer()
+    
+    logger.info("Transformer started with both consumers")
+  }
+  
+  /**
+   * Start the original transformer consumer
+   */
+  private def startOriginalConsumer(): Unit = {
     // Create a consumer channel
     consumeChannel = RabbitMQManager.createChannel("transformer-consumer")
     
@@ -217,7 +247,115 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
     
     // Start consuming
     consumerTag = consumeChannel.basicConsume(queueName, false, deliverCallback, cancelCallback)
-    logger.info(s"Transformer consumer started with tag: $consumerTag")
+    logger.info(s"Original transformer consumer started with tag: $consumerTag")
+  }
+  
+  /**
+   * Start the streaming consumer (formerly in StreamingConsumer class)
+   */
+  private def startStreamingConsumer(): Unit = {
+    try {
+      logger.info("Starting streaming consumer...")
+      
+      // Create a dedicated channel for this consumer
+      streamingConsumerChannel = RabbitMQManager.createChannel("streaming-consumer")
+      
+      // Declare the topic exchange
+      val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
+      streamingConsumerChannel.exchangeDeclare(exchange, "topic", true)
+      
+      // Declare a temporary queue for the consumer
+      val queueName = streamingConsumerChannel.queueDeclare().getQueue() // Anonymous temporary queue
+      
+      logger.info(s"Using streaming consumer queue: $queueName")
+      
+      // Bind queue to exchange with routing patterns for user events
+      streamingConsumerChannel.queueBind(queueName, exchange, RabbitMQManager.RoutingKeys.USER_ACTIONS)
+      
+      // Set QoS for backpressure control - only process a limited number at a time
+      streamingConsumerChannel.basicQos(10) 
+      
+      val deliverCallback = new DeliverCallback {
+        override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
+          val message = new String(delivery.getBody, StandardCharsets.UTF_8)
+          val routingKey = delivery.getEnvelope.getRoutingKey
+          
+          logger.debug(s"Received streaming message with routing key [$routingKey]: ${message.take(100)}...")
+          messagesReceivedCounter.inc()
+          
+          try {
+            decode[UserEvent](message) match {
+              case Right(event) =>
+                logger.info(s"Processing streaming event [${event.eventType}] for user ${event.userId}")
+                
+                // Process the event using the transformer
+                processEvent(event).onComplete {
+                  case scala.util.Success(_) => 
+                    logger.debug(s"Successfully processed streaming event for user ${event.userId}")
+                    streamingConsumerChannel.basicAck(delivery.getEnvelope.getDeliveryTag, false)
+                    streamingMessagesProcessedCounter.inc()
+                    
+                  case scala.util.Failure(exception) =>
+                    logger.error(s"Failed to process streaming event for user ${event.userId}: ${exception.getMessage}", exception)
+                    // Detect permanent failures vs. retriable failures
+                    val isPermanentFailure = exception match {
+                      case _: IllegalArgumentException => true
+                      case _: java.lang.IllegalStateException => true
+                      case _ => false
+                    }
+                    
+                    // Don't requeue permanent failures
+                    streamingConsumerChannel.basicNack(delivery.getEnvelope.getDeliveryTag, false, !isPermanentFailure)
+                    streamingMessageErrorsCounter.inc()
+                }
+              
+              case Left(error) =>
+                logger.error(s"Failed to parse streaming message as UserEvent: ${error.getMessage}")
+                // Don't requeue parsing errors - they won't succeed on retry
+                streamingConsumerChannel.basicNack(delivery.getEnvelope.getDeliveryTag, false, false)
+                streamingMessageErrorsCounter.inc()
+            }
+          } catch {
+            case e: Exception =>
+              logger.error(s"Unexpected error processing streaming message: ${e.getMessage}", e)
+              // Requeue on unexpected errors as they might be temporary
+              streamingConsumerChannel.basicNack(delivery.getEnvelope.getDeliveryTag, false, true)
+              streamingMessageErrorsCounter.inc()
+          }
+        }
+      }
+      
+      val cancelCallback = new CancelCallback {
+        override def handle(consumerTag: String): Unit = {
+          logger.warn(s"Streaming consumer canceled: $consumerTag")
+          
+          // Attempt to restart consumer after delay if service is still running
+          new Thread(() => {
+            try {
+              logger.info("Attempting to restart streaming consumer in 5 seconds...")
+              Thread.sleep(5000)
+              startStreamingConsumer()
+            } catch {
+              case e: Exception =>
+                logger.error(s"Failed to restart streaming consumer: ${e.getMessage}", e)
+            }
+          }).start()
+        }
+      }
+      
+      // Start consuming with manual ack mode
+      streamingConsumerTag = streamingConsumerChannel.basicConsume(
+        queueName,  // Use the temporary queue created
+        false, // manual ack
+        deliverCallback,
+        cancelCallback
+      )
+      logger.info(s"Streaming consumer started with tag $streamingConsumerTag")
+    } catch {
+      case e: Exception =>
+        logger.error(s"Failed to start streaming consumer: ${e.getMessage}", e)
+        throw e
+    }
   }
 
   /**
@@ -347,11 +485,21 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
    */
   def getMetrics: String = {
     val avgTime = if (totalProcessed > 0) totalProcessingTime / totalProcessed else 0
+    val received = messagesReceivedCounter.get()
+    val processed = messageProcessedCounter.get() + streamingMessagesProcessedCounter.get()
+    val errors = errorCounter.get() + streamingMessageErrorsCounter.get()
+    val successRate = if (received > 0) (processed.toDouble / received.toDouble) * 100.0 else 0.0
+    
     s"""Transformer Metrics:
        |  Total events processed: $totalProcessed
        |  Average processing time: ${avgTime}ms
        |  Min processing time: ${if (minProcessingTime == Long.MaxValue) 0 else minProcessingTime}ms
        |  Max processing time: ${maxProcessingTime}ms
+       |  
+       |  Messages received: $received
+       |  Messages processed: $processed
+       |  Processing errors: $errors
+       |  Success rate: $successRate%.2f%%
        |""".stripMargin
   }
   
@@ -370,10 +518,10 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
   /**
    * Close resources when shutting down
    */
-  def close(): Unit = {
+  override def close(): Unit = {
     logger.info("Closing Transformer resources...")
     
-    // Close consumer channel
+    // Close original consumer channel
     if (consumeChannel != null && consumeChannel.isOpen) {
       try {
         if (consumerTag != null) {
@@ -382,6 +530,30 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) {
         RabbitMQManager.closeChannel("transformer-consumer")
       } catch {
         case e: Exception => logger.warn(s"Error closing consumer channel: ${e.getMessage}")
+      }
+    }
+    
+    // Close streaming consumer channel
+    if (streamingConsumerChannel != null && streamingConsumerChannel.isOpen) {
+      try {
+        if (streamingConsumerTag != null) {
+          logger.info(s"Canceling streaming consumer with tag $streamingConsumerTag")
+          streamingConsumerChannel.basicCancel(streamingConsumerTag)
+        }
+        
+        // Wait a moment for in-flight processing to complete
+        Thread.sleep(200)
+        
+        // Close the channel
+        if (streamingConsumerChannel.isOpen) {
+          logger.info("Closing streaming consumer channel")
+          RabbitMQManager.closeChannel("streaming-consumer")
+        }
+      } catch {
+        case e: Exception => 
+          logger.error(s"Error closing streaming consumer: ${e.getMessage}", e)
+      } finally {
+        streamingConsumerTag = null
       }
     }
     

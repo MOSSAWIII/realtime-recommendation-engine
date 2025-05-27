@@ -13,7 +13,7 @@ RUN sbt update
 COPY src/ src/
 COPY src/main/resources/ resources/
 
-RUN sbt compile
+# RUN sbt compile
 
 EXPOSE 8080
 

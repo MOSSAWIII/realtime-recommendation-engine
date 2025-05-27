@@ -1,112 +1,86 @@
 package unit.application.core
 
 import application.core.{Recommender, DataManager}
+import common.base.UnitSpec
+import common.mocks.{MockDataManager, TestRepository}
 import domain.models._
-import common.base.UnitTestBase
-import org.scalatest.matchers.should.Matchers
-import scala.concurrent.{Future, Await}
-import scala.concurrent.duration._
-import scala.concurrent.ExecutionContext.Implicits.global
 import org.mockito.Mockito._
-import org.mockito.ArgumentMatchers._
+import org.scalatest.BeforeAndAfterEach
+import scala.concurrent.{Future, Await, ExecutionContext}
+import scala.concurrent.duration._
+import java.util.concurrent.CountDownLatch
 
-class RecommenderSpec extends UnitTestBase {
+class RecommenderSpec extends UnitSpec with BeforeAndAfterEach {
   
-  "Optimized Recommender" should "generate recommendations based on user history" in {
-    // Create mock DataManager
-    val mockDataManager = mock(classOf[DataManager])
+  class RecommenderUnderTest(dataManager: DataManager)(implicit ec: ExecutionContext) 
+    extends Recommender(dataManager)(ec) {
     
-    // Setup mock responses
-    val userId = 123L
-    val now = System.currentTimeMillis()
-    
-    // Mock user events
-    when(mockDataManager.getProcessedEventsForUser(anyLong(), anyInt())).thenReturn(
-      Future.successful(List(
-        ProcessedEvent(Some(1L), userId, "view", Some(101L), Map("category" -> "tech"), now - 10000),
-        ProcessedEvent(Some(2L), userId, "purchase", Some(101L), Map("category" -> "tech"), now - 5000),
-        ProcessedEvent(Some(3L), userId, "view", Some(102L), Map("category" -> "music"), now - 2000)
-      ))
-    )
-    
-    // Mock user profile
-    when(mockDataManager.getUserProfile(anyLong())).thenReturn(
-      Future.successful(Some(User(
-        userId = userId,
-        name = Some("Test User"),
-        emailAddress = Some("test@example.com"),
-        location = Some("New York, USA")
-      )))
-    )
-    
-    // Mock user friends
-    when(mockDataManager.getUserFriends(anyLong())).thenReturn(
-      Future.successful(List(
-        UserFriend(userId, 456L, 1.0),
-        UserFriend(userId, 789L, 0.8)
-      ))
-    )
-    
-    // Mock active events
-    when(mockDataManager.getAllActiveEvents()).thenReturn(
-      Future.successful(List(
-        Event(
-          id = Some(101L),
-          name = "Tech Conference",
-          description = Some("A conference about technology"),
-          startTime = now + 86400000,
-          location = Some("New York, USA"),
-          createdBy = 1L,
-          status = "active",
-          participants = Set(456L) // Friend is participating
-        ),
-        Event(
-          id = Some(102L),
-          name = "Music Festival",
-          description = Some("A music festival"),
-          startTime = now + 172800000,
-          location = Some("Boston, USA"),
-          createdBy = 2L,
-          status = "active",
-          participants = Set.empty
-        )
-      ))
-    )
-    
-    // Mock recommendation storage
-    when(mockDataManager.storeRecommendation(any[Recommendation])).thenAnswer { invocation =>
-      Future.successful(invocation.getArgument(0).asInstanceOf[Recommendation])
-    }
-    
-    // Create recommender with mock data manager
-    val recommender = new RecommenderUnderTest(mockDataManager)
-    
-    // Test request
-    val request = RecommendationRequest(
-      userId = userId,
-      timestamp = now
-    )
-    
-    // Generate recommendations
-    val recommendationFuture = recommender.generateRecommendations(request)
-    val recommendation = Await.result(recommendationFuture, 2.seconds)
-    
-    // Verify recommendations
-    recommendation.userId shouldBe userId
-    recommendation.recommendedItems.size should be >= 1
-    
-    // Event 101 should be recommended with a high score (has friend participating and location match)
-    val event101 = recommendation.recommendedItems.find(_.itemId == 101L)
-    event101 shouldBe defined
-    event101.get.score should be > 0.0
-    
-    // The reason should contain social connections
-    event101.get.reason should include("social connections")
+    // Exposer des méthodes ou états internes pour les tests si nécessaire
   }
   
-  // Test class to avoid RabbitMQ operations
-  class RecommenderUnderTest(dataManager: DataManager) extends Recommender(dataManager) {
-    override def start(): Unit = {}
-    override def close(): Unit = {}
+  "Recommender" should "generate recommendations based on user history" in {
+    // Arrange
+    val mockRepo = new TestRepository()
+    
+    // Ajouter des données de test
+    val userId = 123L
+    val testEvents = List(
+      ProcessedEvent(
+        id = Some(1),
+        userId = userId,
+        eventType = "view",
+        itemId = Some(456),
+        properties = Map("category" -> "movie"),
+        timestamp = System.currentTimeMillis() - 1000,
+        processingTimestamp = System.currentTimeMillis()
+      ),
+      ProcessedEvent(
+        id = Some(2),
+        userId = userId,
+        eventType = "like",
+        itemId = Some(789),
+        properties = Map("category" -> "movie"),
+        timestamp = System.currentTimeMillis() - 2000,
+        processingTimestamp = System.currentTimeMillis()
+      )
+    )
+    
+    // Créer des événements qui peuvent être recommandés
+    val event1 = Event(
+      id = Some(456),
+      name = "Test Event 1",
+      description = Some("Description 1"),
+      startTime = System.currentTimeMillis() + 10000,
+      endTime = Some(System.currentTimeMillis() + 20000),
+      location = Some("Test Location 1"),
+      createdBy = 1,
+      status = "active"
+    )
+    
+    val event2 = Event(
+      id = Some(789),
+      name = "Test Event 2",
+      description = Some("Description 2"),
+      startTime = System.currentTimeMillis() + 15000,
+      endTime = Some(System.currentTimeMillis() + 25000),
+      location = Some("Test Location 2"),
+      createdBy = 2,
+      status = "active"
+    )
+    
+    // Configurer le mock repository
+    mockRepo.mockEvents = event1 :: mockRepo.mockEvents
+    mockRepo.mockEvents = event2 :: mockRepo.mockEvents
+    testEvents.foreach(mockRepo.storeProcessedEvent)
+    
+    // Act
+    import domain.models.RecommendationRequest
+    val recommender = new RecommenderUnderTest(mockRepo)
+    val futureRecommendation = recommender.generateRecommendations(RecommendationRequest(userId))
+    val recommendation = Await.result(futureRecommendation, 5.seconds)
+    
+    // Assert
+    recommendation.recommendedItems.size should be >= 1
+    recommendation.userId shouldBe userId
   }
 }

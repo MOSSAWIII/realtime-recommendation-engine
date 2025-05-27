@@ -4,7 +4,8 @@ import io.circe.{Decoder, Encoder}
 import io.circe.generic.semiauto._
 
 /**
- * Represents a friendship between two users with a strength value.
+ * Représente la relation d'amitié entre deux utilisateurs avec un score d'affinité.
+ * Diffère de Friendship qui modélise le statut d'amitié (en attente, accepté, etc.)
  *
  * @param userId The ID of the user
  * @param friendId The ID of the friend

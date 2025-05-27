@@ -1,0 +1,44 @@
+// filepath: src/test/resources/logback-test.xml
+<configuration>
+  <!-- Console appender configuration -->
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  
+  <!-- File appender for detailed test logs -->
+  <appender name="TEST_FILE" class="ch.qos.logback.core.FileAppender">
+    <file>target/test.log</file>
+    <append>false</append>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  
+  <!-- Special appender for test runs with unique run ID -->
+  <appender name="TEST_RUN_FILE" class="ch.qos.logback.core.FileAppender">
+    <file>${test.log.file:-target/test-run.log}</file>
+    <append>true</append>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%X{testRunId}] [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  
+  <!-- Adjust log levels for different packages -->
+  <logger name="common.utils" level="DEBUG" />
+  <logger name="integration" level="DEBUG" />
+  <logger name="org.testcontainers" level="INFO" />
+  <logger name="com.github.dockerjava" level="WARN" />
+  <logger name="com.zaxxer.hikari" level="WARN" />
+  
+  <!-- Conditional debug based on system property -->
+  <logger name="unit" level="${log.level.unit:-INFO}" />
+  
+  <!-- Root logger -->
+  <root level="${log.level.root:-INFO}">
+    <appender-ref ref="CONSOLE" />
+    <appender-ref ref="TEST_FILE" />
+    <appender-ref ref="TEST_RUN_FILE" />
+  </root>
+</configuration>

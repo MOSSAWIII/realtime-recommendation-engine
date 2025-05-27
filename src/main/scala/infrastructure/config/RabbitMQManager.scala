@@ -3,7 +3,6 @@ package infrastructure.messaging.rabbitmq
 import com.rabbitmq.client.{Channel, Connection, ConnectionFactory}
 import com.typesafe.config.ConfigFactory
 import infrastructure.config.DatabaseConfig
-import infrastructure.messaging.rabbitmq.RabbitMQManager
 import infrastructure.config.RabbitMQConfigSection
 import org.slf4j.LoggerFactory
 import scala.collection.mutable
@@ -64,26 +63,52 @@ object RabbitMQManager {
   def getConnection: Connection = synchronized {
     if (connection == null || !connection.isOpen) {
       logger.info("Initializing RabbitMQ connection")
-      val factory = new ConnectionFactory()
-      factory.setHost(configSection.host)
-      factory.setPort(configSection.port)
-      factory.setUsername(configSection.username)
-      factory.setPassword(configSection.password)
-      
-      connection = factory.newConnection("recommendation-engine")
-      logger.info("RabbitMQ connection established")
+      initializeConnection()
     }
     connection
   }
   
   /**
-   * Creates a new channel with the given name
+   * Initialize RabbitMQ connection
+   */
+  private def initializeConnection(): Unit = {
+    val factory = new ConnectionFactory()
+    factory.setHost(configSection.host)
+    factory.setPort(configSection.port)
+    factory.setUsername(configSection.username)
+    factory.setPassword(configSection.password)
+    
+    connection = factory.newConnection("recommendation-engine")
+    logger.info("RabbitMQ connection established")
+  }
+  
+  /**
+   * Create a channel with automatic reconnection
    */
   def createChannel(name: String): Channel = {
-    logger.info(s"Creating RabbitMQ channel: $name")
-    val channel = getConnection.createChannel()
-    channels.put(name, channel)
-    channel
+    synchronized {
+      if (connection == null || !connection.isOpen) {
+        logger.info("Initializing RabbitMQ connection")
+        initializeConnection()
+      }
+      
+      try {
+        val channel = connection.createChannel()
+        channels.put(name, channel)
+        logger.info(s"Creating RabbitMQ channel: $name")
+        
+        // Configurer la confirmation de publication si nécessaire
+        if (configSection.publisherConfirmEnabled) {
+          channel.confirmSelect()
+        }
+        
+        channel
+      } catch {
+        case e: Exception =>
+          logger.error(s"Failed to create channel $name: ${e.getMessage}", e)
+          throw e
+      }
+    }
   }
   
   /**

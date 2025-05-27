@@ -1,54 +1,112 @@
 package unit.application.core
 
 import application.core.DataManager
-import common.base.UnitSpec
-import infrastructure.config.{ConfigurationService, DatabaseConfigSection, DataManagerConfigSection}
-import com.typesafe.config.ConfigFactory
-import domain.models._
+import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider, DatabaseConfigSection, DataManagerConfigSection}
+import utils.error.DatabaseException  // Correction de l'import
+import java.sql.{Connection, PreparedStatement, ResultSet}
+import org.mockito.Mockito.{mock, when}
+import org.mockito.ArgumentMatchers.any
+import org.scalatest.concurrent.ScalaFutures
+import org.scalatest.concurrent.ScalaFutures._
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.mockito.Mockito._
-import org.mockito.ArgumentMatchers._
-import scala.concurrent.{Await, ExecutionContext}
+import org.scalatest.BeforeAndAfterEach
+import org.scalatest.BeforeAndAfterAll
+import scala.concurrent.{Future, Await, ExecutionContext}
 import scala.concurrent.duration._
-import java.sql.{Connection, PreparedStatement, ResultSet, SQLException}
-import utils.error.DatabaseException
+import common.base.IsolatedTestBase
+import common.mocks.{TestConfigurationService, TestDatabaseProvider}
 
-class DataManagerSpec extends UnitSpec with Matchers {
+class DataManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach with BeforeAndAfterAll with ScalaFutures {
   implicit val ec: ExecutionContext = ExecutionContext.global
   
-  "DataManager" should "handle database connectivity errors gracefully" in {
-    // Mock configuration service that returns valid-looking but non-functional DB config
-    val mockConfig = createMockConfig("jdbc:postgresql://non-existent-host:5432/test", "user", "pass")
+  "DataManager" should "handle database exceptions properly" in {
+    // Création des mocks avec types explicites
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
+    val mockConnection = mock(classOf[Connection])
+    val mockPreparedStatement = mock(classOf[PreparedStatement])
+    val mockResultSet = mock(classOf[ResultSet])
     
-    val dataManager = new DataManager(mockConfig)
+    // Simulation comportement
+    when(mockDbProvider.getConnection()).thenReturn(mockConnection)
+    when(mockConnection.prepareStatement(any[String])).thenReturn(mockPreparedStatement)
+    when(mockPreparedStatement.executeQuery()).thenReturn(mockResultSet)
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mock(classOf[DatabaseConfigSection]))
     
-    // Test connection should fail, but not throw exception
-    val thrown = intercept[DatabaseException] {
-      Await.result(dataManager.getUserProfile(1L), 5.seconds)
+    // Instanciation avec les deux paramètres requis
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    
+    // Test de l'exception avec ScalaFutures
+    import scala.concurrent.duration._
+    whenReady(dataManager.getUserProfile(1).failed, timeout(5.seconds)) { e =>
+      e shouldBe a[DatabaseException]
     }
+  }
+  
+  it should "handle database connectivity errors gracefully" in {
+    // Spécifier explicitement le type pour éviter l'ambiguïté
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
     
-    thrown.getMessage should include("Failed to acquire database connection")
+    when(mockDbProvider.getConnection()).thenThrow(new RuntimeException("Test DB connection error"))
     
-    dataManager.close()
+    // Fournir tous les paramètres requis
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    
+    // Utiliser ScalaFutures.whenReady avec recoverToExceptionIf
+    import scala.concurrent.duration._
+    whenReady(dataManager.getProcessedEventsForUser(123L).failed) { e =>
+      e shouldBe a[DatabaseException]
+    }
+  }
+  
+  it should "handle database errors gracefully" in {
+    // Spécifier explicitement le type pour éviter l'ambiguïté
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
+    val mockConnection = mock(classOf[Connection])
+    
+    when(mockDbProvider.getConnection()).thenThrow(new RuntimeException("DB Error"))
+    
+    // Fournir tous les paramètres requis
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    
+    // Utiliser whenReady avec pattern matching
+    whenReady(dataManager.initTables().failed) { exception =>
+      exception shouldBe a[DatabaseException]
+    }
   }
   
   it should "close all resources when shut down" in {
-    val mockConfig = createMockConfig("jdbc:postgresql://non-existent-host:5432/test", "user", "pass")
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
     
-    val dataManager = new DataManager(mockConfig)
-    dataManager.start() // Start even though it will fail to connect
-    dataManager.close() // Should not throw exceptions
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
+    
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    dataManager.shutdown() // Should not throw exceptions
     
     // No specific assertions needed, just confirming it doesn't throw
     succeed
   }
   
   it should "properly cache and invalidate cached data" in {
-    // This test requires mocking the internal cache behavior
-    // We'll use reflection to access the private cache
+    // Création des mocks
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
     
-    val mockConfig = createMockConfig("jdbc:postgresql://localhost:5432/test", "user", "pass")
-    val dataManager = new DataManager(mockConfig)
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
+    
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
     
     // Create a test for caching using reflection
     val cacheMethod = dataManager.getClass.getDeclaredMethod("putInCache", 
@@ -64,7 +122,18 @@ class DataManagerSpec extends UnitSpec with Matchers {
     invalidateCacheMethod.setAccessible(true)
     
     // Test put and get
-    val testUser = User(userId = 123, name = Some("Test User"))
+    import domain.models.User
+    val testUser = User(
+      userId = 123, 
+      name = Some("Test User"),
+      emailAddress = None,
+      locale = "en_US",
+      birthYear = None,
+      gender = None,
+      location = None,
+      timezone = None,
+      isGenerated = false
+    )
     cacheMethod.invoke(dataManager, "user", 123L, Some(testUser), scala.concurrent.duration.Duration.apply(5, "minutes"))
     
     val cachedResult = getCacheMethod.invoke(dataManager, "user", 123L)
@@ -74,47 +143,6 @@ class DataManagerSpec extends UnitSpec with Matchers {
     invalidateCacheMethod.invoke(dataManager, "user", 123L)
     val afterInvalidate = getCacheMethod.invoke(dataManager, "user", 123L)
     afterInvalidate shouldBe None
-  }
-  
-  private def createMockConfig(url: String, user: String, password: String): ConfigurationService = {
-    val configService = mock(classOf[ConfigurationService])
-    
-    // Create mock DB config
-    val mockDbConfig = new DatabaseConfigSection(ConfigFactory.parseString(s"""
-      |database {
-      |  url = "$url"
-      |  user = "$user" 
-      |  password = "$password"
-      |  poolSize = 5
-      |  connectionTimeout = "5s"
-      |  idleTimeout = "10m"
-      |}
-    """.stripMargin))
-    
-    // Create mock DataManager config
-    val mockDataMgrConfig = new DataManagerConfigSection(ConfigFactory.parseString(s"""
-      |dataManager {
-      |  cache {
-      |    defaultTTL = "5m"
-      |    shortTTL = "1m"
-      |  }
-      |  query {
-      |    timeout = "5s"
-      |    maxPoolSize = 5
-      |    defaultBatchSize = 100
-      |  }
-      |  transaction {
-      |    timeout = "5s"
-      |    maxRetries = 3 
-      |    retryDelay = "1s"
-      |  }
-      |}
-    """.stripMargin))
-    
-    when(configService.get[DatabaseConfigSection]).thenReturn(mockDbConfig)
-    when(configService.get[DataManagerConfigSection]).thenReturn(mockDataMgrConfig)
-    
-    configService
   }
 }
 

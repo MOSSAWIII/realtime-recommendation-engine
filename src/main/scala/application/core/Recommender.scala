@@ -1095,4 +1095,71 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
        |  Response Time: Avg=${avg}ms, Min=${min}ms, Max=${max}ms
        |""".stripMargin
   }
+
+  /**
+   * Perform a healthcheck on the recommender component
+   * @return true if the component is healthy, false otherwise
+   */
+  def healthCheck(): Boolean = {
+    try {
+      // Vérifier si les caches sont accessibles
+      val userCacheOk = userProfileCache != null
+      val eventCacheOk = eventCache != null
+      val recentEventsOk = recentUserEvents != null
+      
+      // Vérifier si RabbitMQ est accessible
+      val rmqOk = channelConsumer != null && channelConsumer.isOpen
+      
+      // Utiliser la méthode healthCheck de DataManager
+      val dataManagerOk = Try(dataManager.healthCheck()).getOrElse(false)
+      
+      // Enregistrer les résultats dans le registry pour le monitoring
+      HealthCheckRegistry.register(
+        HealthCheckRegistry.createHealthCheck("recommender", "components") {
+          val status = if (userCacheOk && eventCacheOk && recentEventsOk && rmqOk && dataManagerOk) {
+            HealthStatus.Healthy
+          } else {
+            HealthStatus.Degraded
+          }
+          
+          HealthCheckResult(
+            component = "recommender",
+            check = "components",
+            status = status,
+            message = s"Recommender components health: UserCache=$userCacheOk, EventCache=$eventCacheOk, RecentEvents=$recentEventsOk, RMQ=$rmqOk, DataManager=$dataManagerOk",
+            details = Map(
+              "userCache" -> userCacheOk.toString,
+              "eventCache" -> eventCacheOk.toString,
+              "recentEvents" -> recentEventsOk.toString,
+              "rabbitmq" -> rmqOk.toString,
+              "dataManager" -> dataManagerOk.toString
+            )
+          )
+        }
+      )
+      
+      userCacheOk && eventCacheOk && recentEventsOk && rmqOk && dataManagerOk
+    } catch {
+      case e: Exception =>
+        false
+    }
+  }
+
+  /**
+   * Améliore la performance en préchargant les données pour un utilisateur
+   * avant de générer des recommandations
+   */
+  def preloadUserData(userId: Long): Future[Boolean] = {
+    val futures = List(
+      getUserProfile(userId).map(_ => true),
+      getUserEvents(userId).map(_ => true),
+      getUserFriends(userId).map(_ => true)
+    )
+    
+    Future.sequence(futures).map(_ => true).recover { 
+      case e: Exception => 
+        logger.warn(s"Failed to preload data for user $userId: ${e.getMessage}")
+        false
+    }
+  }
 }

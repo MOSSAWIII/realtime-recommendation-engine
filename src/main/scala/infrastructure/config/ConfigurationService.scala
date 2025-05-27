@@ -19,11 +19,11 @@ import scala.reflect.ClassTag
  * - Configuration change notifications
  * - JMX management operations
  */
-class ConfigurationService(private val config: Config = ConfigFactory.load()) {
+class ConfigurationService(initialConfig: Option[Config] = None) extends ConfigurationServiceInterface {
   private val logger = LoggerFactory.getLogger(getClass)
   
   // Current loaded configuration
-  @volatile private var currentConfig = config
+  @volatile private var currentConfig = initialConfig.getOrElse(ConfigFactory.load())
   
   // Scheduler for periodic config reload
   private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
@@ -72,10 +72,56 @@ class ConfigurationService(private val config: Config = ConfigFactory.load()) {
     val constructor = tag.runtimeClass.getConstructors.head
     
     try {
-      constructor.newInstance(config).asInstanceOf[T]
+      constructor.newInstance(currentConfig).asInstanceOf[T]
     } catch {
       case e: Exception => 
         throw new RuntimeException(s"Failed to instantiate configuration section ${tag.runtimeClass.getName}: ${e.getMessage}", e)
+    }
+  }
+
+  /**
+   * Get a typed configuration section using implicit converter
+   */
+  override def get[T <: ConfigSection](implicit converter: Config => T): T = {
+    val sectionName = converter.getClass.getSimpleName
+    configSections.computeIfAbsent(
+      sectionName,
+      _ => converter(currentConfig)
+    ).asInstanceOf[T]
+  }
+
+  /**
+   * Get raw configuration
+   */
+  override def getConfig: Config = currentConfig
+
+  /**
+   * Reload configuration from disk with public interface
+   */
+  override def reload(): Boolean = reloadConfig()
+
+  /**
+   * Update configuration value (string version)
+   */
+  override def updateConfigValue(path: String, value: String): Boolean = {
+    updateConfigValueGeneric(path, value)
+  }
+
+  /**
+   * Update a configuration value with any type
+   */
+  override def updateConfigValueGeneric(path: String, value: Any): Boolean = {
+    try {
+      val newValue = ConfigValueFactory.fromAnyRef(value)
+      val newConfig = currentConfig.withValue(path, newValue)
+      updateConfiguration(newConfig)
+      notifyChangeListeners(newConfig)
+      validateAllConfigurations()
+      true
+    } catch {
+      case e: Exception =>
+        logger.error(s"Failed to update configuration value at path $path", e)
+        false
     }
   }
 
@@ -349,7 +395,7 @@ class ConfigurationServiceMBean(service: ConfigurationService) extends Configura
   }
   
   override def updateConfigValue(path: String, value: String): Boolean = {
-    service.updateConfigValue(path, value)
+    service.updateConfigValueGeneric(path, value)
   }
 }
 
@@ -378,7 +424,7 @@ object ConfigurationService {
   def initialize(config: Option[Config] = None): Unit = synchronized {
     if (instance.isEmpty) {
       val service = config match {
-        case Some(c) => new ConfigurationService(c)
+        case Some(c) => new ConfigurationService(Some(c))
         case None => new ConfigurationService()
       }
       service.initialize()
@@ -402,13 +448,6 @@ object ConfigurationService {
     }
   }
   
-  /**
-   * Shut down the ConfigurationService
-   */
-  def shutdown(): Unit = synchronized {
-    instance.foreach(_.shutdown())
-    instance = None
-    logger.info("ConfigurationService shut down")
-  }
+  // Keep the factory method for backward compatibility
 }
 
