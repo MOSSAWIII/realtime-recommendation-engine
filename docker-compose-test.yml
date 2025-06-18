@@ -11,10 +11,13 @@ services:
       interval: 2s
       timeout: 2s
       retries: 5
+      start_period: 10s
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
     networks:
       default:
         aliases:
           - db
+          - test-db
 
   test-rabbitmq:
     image: rabbitmq:3-management
@@ -24,16 +27,21 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_ERLANG_COOKIE: test_cookie
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit vm_memory_high_watermark 0.6"
+    volumes:
+      - rabbitmq_test_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmqctl", "status"]
-      interval: 15s
-      timeout: 15s
-      retries: 5
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
       start_period: 40s
     networks:
       default:
         aliases:
           - rabbitmq
+          - test-rabbitmq
 
   test-runner:
     build:
@@ -49,6 +57,10 @@ services:
       - DB_PASSWORD=test_password
       - RABBITMQ_HOST=test-rabbitmq
       - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=guest
+      - RABBITMQ_PASSWORD=guest
+      - TEST_VHOST=${TEST_VHOST:-test_env}  # Add vhost for isolation
+      - TEST_RUN_ID=${TEST_RUN_ID}
       - DATABASE_URL=jdbc:postgresql://test-db:5432/test_recommendation_engine
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=test_password
@@ -56,6 +68,7 @@ services:
       - DATABASE_PORT=5432
       - DOCKER_HOST=unix:///var/run/docker.sock
       - TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+      - TESTCONTAINERS_RYUK_DISABLED=true
     volumes:
       - .:/app
       - ~/.sbt:/root/.sbt
@@ -70,3 +83,7 @@ services:
       default:
         aliases:
           - test-client
+
+volumes:
+  rabbitmq_test_data:
+    driver: local

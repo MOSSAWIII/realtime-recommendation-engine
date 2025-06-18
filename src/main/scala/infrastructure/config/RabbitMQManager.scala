@@ -20,6 +20,14 @@ object RabbitMQManager {
   private var connection: Connection = _
   private val channels = new ConcurrentHashMap[String, Channel]()
   
+  // Add test environment support
+  private val isTestMode = sys.env.get("TEST_MODE").contains("true")
+  private val testVhost = if (isTestMode) sys.env.getOrElse("TEST_VHOST", "test_env") else "/"
+
+  val virtualHost: String = 
+    // Utiliser directement la propriété virtualHost de RabbitMQConfigSection
+    configSection.virtualHost
+  
   // Define standard queue and exchange names based on simplified architecture diagram
   object Exchanges {
     val USER_ACTIONS = "user_actions_exchange"
@@ -72,13 +80,7 @@ object RabbitMQManager {
    * Initialize RabbitMQ connection
    */
   private def initializeConnection(): Unit = {
-    val factory = new ConnectionFactory()
-    factory.setHost(configSection.host)
-    factory.setPort(configSection.port)
-    factory.setUsername(configSection.username)
-    factory.setPassword(configSection.password)
-    
-    connection = factory.newConnection("recommendation-engine")
+    connection = createConnection()
     logger.info("RabbitMQ connection established")
   }
   
@@ -187,6 +189,71 @@ object RabbitMQManager {
         case e: Exception => 
           logger.warn(s"Error closing RabbitMQ connection: ${e.getMessage}")
       }
+    }
+  }
+
+  // AJOUTER: Méthode pour configurer le vhost dynamiquement
+  def setTestVirtualHost(vhost: String): Unit = {
+    logger.info(s"Setting test virtual host to: $vhost")
+    System.setProperty("rabbitmq.virtualHost", vhost)
+    
+    // Si une connexion existe déjà, la fermer pour forcer une reconnexion
+    if (connection != null && connection.isOpen) {
+      logger.info("Closing existing connection to apply new vhost")
+      shutdown()
+    }
+  }
+  
+  private def getVirtualHost(): String = {
+    // Vérifier d'abord les propriétés système (pour les tests)
+    Option(System.getProperty("rabbitmq.virtualHost"))
+      .orElse(sys.env.get("RABBITMQ_VHOST"))
+      .orElse(sys.env.get("TEST_VHOST"))
+      .getOrElse("/") // Default vhost
+  }
+  
+  private def createConnection(): Connection = {
+    val factory = new ConnectionFactory()
+    
+    // MODIFIER: Utiliser la méthode getVirtualHost()
+    val vhost = getVirtualHost()
+    logger.info(s"Connecting to RabbitMQ with vhost: $vhost")
+    
+    factory.setHost(configSection.host)
+    factory.setPort(configSection.port)
+    factory.setUsername(configSection.username)
+    factory.setPassword(configSection.password)
+    factory.setVirtualHost(vhost) // Utiliser le vhost configuré
+    
+    factory.newConnection("recommendation-engine")
+  }
+
+  // AJOUTER: Méthode pour fermer la connexion
+  def closeConnection(): Unit = {
+    synchronized {
+      Option(connection).foreach { conn =>
+        try {
+          // Fermer tous les channels d'abord
+          import scala.jdk.CollectionConverters._
+          channels.values().asScala.foreach { channel =>
+            if (channel.isOpen) {
+              channel.close()
+            }
+          }
+          channels.clear()
+          
+          // Fermer la connexion
+          if (conn.isOpen) {
+            conn.close()
+          }
+          
+          logger.info("RabbitMQ connection closed")
+        } catch {
+          case e: Exception =>
+            logger.warn(s"Error closing RabbitMQ connection: ${e.getMessage}")
+        }
+      }
+      connection = null
     }
   }
 }

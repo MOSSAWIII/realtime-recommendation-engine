@@ -149,9 +149,9 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
       // Initialize queues
       configureQueues()
       
-      // Start consumers
-      startRecommendationRequestConsumer()
-      startProcessedEventsConsumer()
+      // Start consumers - REMOVE recommendation request consumer
+      // startRecommendationRequestConsumer()  // ❌ REMOVE THIS LINE
+      startProcessedEventsConsumer()          // ✅ This now handles both cache updates AND recommendations
       startDataManagerSyncConsumer()
       
       // Schedule background tasks
@@ -175,131 +175,24 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
    * Configures RabbitMQ queues
    */
   private def configureQueues(): Unit = {
+    // SUPPRIMER toutes les déclarations - les queues sont créées par le script de setup
+    logger.debug("Using pre-configured queues from test setup")
+    
+    // Optionnel : vérifier que les queues existent
     try {
-      // Queue declarations with updated names
-      channelConsumer.queueDeclare(
-        RabbitMQManager.Queues.PROCESSED_EVENTS, 
-        true, false, false, null
-      )
-      
-      channelPublisher.queueDeclare(
-        RabbitMQManager.Queues.RECOMMENDATIONS, 
-        true, false, false, null
-      )
-      
-      // Removed obsolete queue declarations
+      channelConsumer.queueDeclarePassive(RabbitMQManager.Queues.PROCESSED_EVENTS)
+      channelPublisher.queueDeclarePassive(RabbitMQManager.Queues.RECOMMENDATIONS)
+      logger.debug("All required queues exist and are accessible")
     } catch {
       case e: Exception =>
-        logger.error("Failed to configure queues", e)
+        logger.error("Required queues not found or not accessible", e)
         throw e
     }
   }
   
   /**
-   * Starts the consumer for recommendation requests
-   */
-  private def startRecommendationRequestConsumer(): Unit = {
-    val deliverCallback = new DeliverCallback {
-      override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
-        val message = new String(delivery.getBody, StandardCharsets.UTF_8)
-        
-        decode[RecommendationRequest](message) match {
-          case Right(request) =>
-            logger.debug(s"Received recommendation request for user ${request.userId}")
-            
-            try {
-              // Check circuit breaker
-              if (isCircuitOpen) {
-                logger.warn(s"Circuit breaker open, rejecting recommendation request for user ${request.userId}")
-                channelConsumer.basicNack(delivery.getEnvelope.getDeliveryTag, false, false)
-                return
-              }
-              
-              // Check recent recommendations cache to avoid duplicate processing
-              recentRecommendations.get(request.userId).foreach { case (cachedRec, timestamp) =>
-                if ((System.currentTimeMillis() - timestamp) < recommendationCacheTTL) {
-                  // Use cached recommendation if recent enough
-                  logger.debug(s"Using cached recommendation for user ${request.userId}")
-                  publishRecommendation(cachedRec)
-                  channelConsumer.basicAck(delivery.getEnvelope.getDeliveryTag, false)
-                  return
-                }
-              }
-              
-              // Generate recommendations with timeout
-              val recommendationsFuture = generateRecommendations(request)
-                .map { recommendations =>
-                  // Store in cache
-                  recentRecommendations.put(
-                    request.userId, 
-                    (recommendations, System.currentTimeMillis())
-                  )
-                  
-                  // Publish recommendations
-                  publishRecommendation(recommendations)
-                  recommendations
-                }
-              
-              // Set a timeout for the future
-              try {
-                Await.result(recommendationsFuture, 5.seconds)
-                channelConsumer.basicAck(delivery.getEnvelope.getDeliveryTag, false)
-                resetCircuitBreaker()
-              } catch {
-                case e: TimeoutException =>
-                  logger.error(s"Recommendation generation timed out for user ${request.userId}")
-                  recordFailure()
-                  channelConsumer.basicNack(delivery.getEnvelope.getDeliveryTag, false, true) // Requeue
-                  
-                case e: Exception =>
-                  logger.error(s"Failed to generate recommendations for user ${request.userId}: ${e.getMessage}", e)
-                  recordFailure()
-                  channelConsumer.basicNack(delivery.getEnvelope.getDeliveryTag, false, true) // Requeue
-              }
-            } catch {
-              case ex: Exception =>
-                logger.error(s"Error processing recommendation request for user ${request.userId}: ${ex.getMessage}", ex)
-                recordFailure()
-                channelConsumer.basicNack(delivery.getEnvelope.getDeliveryTag, false, true)
-            }
-            
-          case Left(error) =>
-            logger.error(s"Failed to decode recommendation request: ${error.getMessage}")
-            channelConsumer.basicReject(delivery.getEnvelope.getDeliveryTag, false) // Don't requeue invalid messages
-        }
-      }
-    }
-    
-    val cancelCallback = new CancelCallback {
-      override def handle(consumerTag: String): Unit = {
-        logger.warn(s"Recommendation consumer cancelled: $consumerTag")
-        
-        // Try to reconnect
-        try {
-          Thread.sleep(5000)
-          channelConsumer = RabbitMQManager.createChannel("recommender-channel")
-          startRecommendationRequestConsumer()
-        } catch {
-          case e: Exception =>
-            logger.error("Failed to reconnect recommendation consumer", e)
-        }
-      }
-    }
-    
-    // Start consuming
-    channelConsumer.basicQos(1) // Process one message at a time
-    channelConsumer.basicConsume(
-      RabbitMQManager.Queues.PROCESSED_EVENTS,
-      false,  // manual ack
-      deliverCallback,
-      cancelCallback
-    )
-    
-    logger.info("Recommendation request consumer started")
-  }
-  
-  /**
    * Starts the consumer for processed events to maintain the in-memory model
+   * AND generate recommendations intelligently
    */
   private def startProcessedEventsConsumer(): Unit = {
     val deliverCallback = new DeliverCallback {
@@ -309,8 +202,36 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
         decode[ProcessedEvent](message) match {
           case Right(event) =>
             try {
-              // Update in-memory model
+              // 1. Update in-memory model (existing logic)
               updateUserEventCache(event)
+              
+              // 2. NEW: Smart triggering logic
+              if (shouldTriggerRecommendation(event)) {
+                logger.debug(s"Triggering recommendation for user ${event.userId} based on processed event")
+                
+                val request = RecommendationRequest(
+                  userId = event.userId,
+                  contextItemId = event.itemId,
+                  timestamp = System.currentTimeMillis()
+                )
+                
+                // Generate and publish recommendation immediately
+                val recommendationsFuture = generateRecommendations(request)
+                  .map { recommendations =>
+                    // Publish recommendations
+                    publishRecommendation(recommendations)
+                    recommendations
+                  }
+                
+                // Handle the future asynchronously to not block the consumer
+                recommendationsFuture.onComplete {
+                  case Success(recommendation) =>
+                    logger.debug(s"Generated recommendation for user ${event.userId} from processed event")
+                  case Failure(e) =>
+                    logger.error(s"Failed to generate recommendation for user ${event.userId}: ${e.getMessage}", e)
+                }
+              }
+              
               channelConsumer.basicAck(delivery.getEnvelope.getDeliveryTag, false)
             } catch {
               case e: Exception =>
@@ -324,7 +245,7 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
         }
       }
     }
-    
+
     val cancelCallback = new CancelCallback {
       override def handle(consumerTag: String): Unit = {
         logger.warn(s"Processed events consumer cancelled: $consumerTag")
@@ -340,7 +261,7 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
         }
       }
     }
-    
+
     // Start consuming
     channelConsumer.basicQos(10) // Process up to 10 messages at a time
     channelConsumer.basicConsume(
@@ -349,8 +270,19 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
       deliverCallback,
       cancelCallback
     )
-    
+
     logger.info("Processed events consumer started")
+  }
+
+  /**
+   * NEW: Determine if a processed event should trigger a recommendation
+   */
+  private def shouldTriggerRecommendation(event: ProcessedEvent): Boolean = {
+    // Simple strategy for immediate fix: trigger on all major events
+    event.eventType match {
+      case "view" | "click" | "like" | "share" | "purchase" => true
+      case _ => false
+    }
   }
   
   /**

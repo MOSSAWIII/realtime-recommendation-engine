@@ -1,69 +1,96 @@
 package common.base
 
-import com.rabbitmq.client.Channel
-import scala.concurrent.duration._
-import scala.concurrent.{Await, Future, Promise}
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-
-import common.utils.{TestResourceManager}
 import infrastructure.messaging.rabbitmq.RabbitMQManager
+import infrastructure.config.ConfigurationService
+import com.rabbitmq.client.{Channel, Connection}
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach}
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.flatspec.AnyFlatSpec
+import scala.util.Try
 
-/**
- * Base de test pour les tests utilisant RabbitMQ
- */
-trait RabbitMQTestBase extends IsolatedTestBase {
+trait RabbitMQTestBase extends AnyFlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach {
   
-  // Noms uniques de ressources pour ce test
-  val testExchange: String = s"test_exchange_${testId}"
+  protected val testVhost: String = sys.env.getOrElse("TEST_VHOST", "test_env")
+  private var testChannel: Option[Channel] = None
   
-  // Canaux RabbitMQ pour ce test
-  private var testChannels = scala.collection.mutable.Map.empty[String, Channel]
-  
-  /**
-   * Crée un canal RabbitMQ unique pour ce test
-   */
-  protected def createTestChannel(name: String): Channel = {
-    val channel = RabbitMQManager.createChannel(s"test_${name}_${testId}")
-    testChannels += (name -> channel)
-    channel
+  override def beforeAll(): Unit = {
+    super.beforeAll()
+    setupTestRabbitMQ()
   }
-  
-  /**
-   * Crée une file d'attente isolée pour ce test
-   */
-  protected def createIsolatedQueue(channel: Channel, prefix: String = "test"): String = {
-    val queueName = TestResourceManager.uniqueQueueName(prefix)
-    channel.queueDeclare(queueName, true, false, true, null)
-    queueName
+
+  override def afterAll(): Unit = {
+    cleanupTestRabbitMQ()
+    super.afterAll()
   }
-  
-  /**
-   * Attend qu'un message soit reçu avec timeout
-   */
-  protected def waitForMessage[T](promise: Promise[T], timeout: Duration = 5.seconds): Option[T] = {
+
+  override def beforeEach(): Unit = {
+    super.beforeEach()
+    purgeTestQueues()
+  }
+
+  private def setupTestRabbitMQ(): Unit = {
     try {
-      Some(Await.result(promise.future, timeout))
+      testChannel = Some(RabbitMQManager.createChannel("test-setup"))
+      validateTestEnvironment()
     } catch {
-      case _: Exception => None
+      case e: Exception =>
+        fail(s"Failed to setup test RabbitMQ environment: ${e.getMessage}")
     }
   }
-  
-  override def afterEach(): Unit = {
-    // Fermer et nettoyer tous les canaux créés pour ce test
-    testChannels.foreach { case (name, channel) =>
-      try {
-        if (channel.isOpen) {
-          channel.close()
+
+  private def validateTestEnvironment(): Unit = {
+    testChannel.foreach { channel =>
+      val requiredExchanges = List("user_actions_exchange", "dlx")
+      val requiredQueues = List(
+        "processed_events_queue", 
+        "recommendations_queue", 
+        "historical_data_queue",
+        "dead_letter_queue"
+      )
+
+      requiredExchanges.foreach { exchange =>
+        Try(channel.exchangeDeclarePassive(exchange)).recover {
+          case _ => fail(s"Required exchange '$exchange' not found in test environment")
         }
-      } catch {
-        case e: Exception => 
-          println(s"Error closing channel $name: ${e.getMessage}")
+      }
+
+      requiredQueues.foreach { queue =>
+        Try(channel.queueDeclarePassive(queue)).recover {
+          case _ => fail(s"Required queue '$queue' not found in test environment")
+        }
       }
     }
-    testChannels.clear()
-    
-    super.afterEach()
+  }
+
+  private def purgeTestQueues(): Unit = {
+    testChannel.foreach { channel =>
+      val queuesToPurge = List(
+        "processed_events_queue",
+        "recommendations_queue", 
+        "historical_data_queue",
+        "dead_letter_queue"
+      )
+
+      queuesToPurge.foreach { queue =>
+        Try(channel.queuePurge(queue))
+      }
+    }
+  }
+
+  private def cleanupTestRabbitMQ(): Unit = {
+    testChannel.foreach(_.close())
+  }
+
+  protected def publishTestMessage(exchange: String, routingKey: String, message: String): Unit = {
+    testChannel.foreach { channel =>
+      channel.basicPublish(exchange, routingKey, null, message.getBytes())
+    }
+  }
+
+  protected def consumeTestMessage(queue: String): Option[String] = {
+    testChannel.flatMap { channel =>
+      Option(channel.basicGet(queue, true)).map(response => new String(response.getBody))
+    }
   }
 }
 

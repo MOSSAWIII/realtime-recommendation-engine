@@ -131,152 +131,141 @@ function setup_test_environment() {
   
   echo "Starting test containers with unique ID: ${TEST_RUN_ID}..."
   
-  # Create container name suffixes with the unique test run ID
+  # Export environment variables for docker-compose
   export TEST_DB_NAME="test-db-${TEST_RUN_ID}"
   export TEST_RABBITMQ_NAME="test-rabbitmq-${TEST_RUN_ID}"
   
-  # Start containers with unique names to avoid conflicts
-  docker-compose -f docker-compose-test.yml up -d \
-    --scale test-db=1 --scale test-rabbitmq=1 \
-    --name ${TEST_DB_NAME} \
-    --name ${TEST_RABBITMQ_NAME}
-
-  # Wait for initialization
-  echo "Waiting for containers to initialize..."
-  sleep 10
-  
-  # Check if containers are healthy
-  db_health=$(docker inspect --format='{{.State.Health.Status}}' ${TEST_DB_NAME} 2>/dev/null || echo "not_running")
-  rabbitmq_health=$(docker inspect --format='{{.State.Health.Status}}' ${TEST_RABBITMQ_NAME} 2>/dev/null || echo "not_running")
-  
-  if [[ "$db_health" != "healthy" || "$rabbitmq_health" != "healthy" ]]; then
-    echo "Containers still initializing, waiting an additional 10 seconds..."
-    sleep 10
+  # Start containers avec gestion d'erreur améliorée
+  if ! docker-compose -f docker-compose-test.yml up -d; then
+    print_error "Failed to start containers. Checking logs..."
     
-    # Check again
-    db_health=$(docker inspect --format='{{.State.Health.Status}}' ${TEST_DB_NAME} 2>/dev/null || echo "not_running")
-    rabbitmq_health=$(docker inspect --format='{{.State.Health.Status}}' ${TEST_RABBITMQ_NAME} 2>/dev/null || echo "not_running")
+    # Afficher les logs détaillés pour diagnostiquer
+    echo "=== RabbitMQ Logs ==="
+    docker-compose -f docker-compose-test.yml logs test-rabbitmq
+    echo "=== DB Logs ==="
+    docker-compose -f docker-compose-test.yml logs test-db
     
-    if [[ "$db_health" != "healthy" || "$rabbitmq_health" != "healthy" ]]; then
-      print_error "Containers failed to reach healthy state. DB: $db_health, RabbitMQ: $rabbitmq_health"
-      cleanup_containers
-      exit 1
+    # Vérifier si c'est un problème de version RabbitMQ
+    if docker-compose -f docker-compose-test.yml logs test-rabbitmq 2>&1 | grep -q "deprecated"; then
+      print_error "RabbitMQ version issue detected. Try using rabbitmq:3.11-management instead"
     fi
+    
+    cleanup_containers
+    exit 1
   fi
   
-  # Setup RabbitMQ resources with unique identifiers
+  # Attendre plus longtemps pour RabbitMQ
+  echo "Waiting for containers to initialize..."
+  sleep 30
+  
+  # Vérifier que RabbitMQ est vraiment prêt
+  echo "Checking RabbitMQ health..."
+  for i in {1..12}; do
+    if docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmq-diagnostics ping > /dev/null 2>&1; then
+      echo "RabbitMQ is ready"
+      break
+    fi
+    echo "Waiting for RabbitMQ... ($i/12)"
+    sleep 5
+  done
+  
+  # Setup RabbitMQ resources
   setup_rabbitmq_queues
   
-  # Create a file to store the unique test run ID for cleanup
-  echo "${TEST_RUN_ID}" > .test_run_id
-  
-  # Export all environment variables needed for tests
+  # Create a comprehensive environment file
   cat > .test_env <<EOF
 export TEST_RUN_ID=${TEST_RUN_ID}
 export TEST_DB_NAME=${TEST_DB_NAME}
 export TEST_RABBITMQ_NAME=${TEST_RABBITMQ_NAME}
-export TEST_EXCHANGE=user_actions_exchange_${TEST_RUN_ID}
-export TEST_PROCESSED_EVENTS_QUEUE=processed_events_queue_${TEST_RUN_ID}
-export TEST_RECOMMENDATIONS_QUEUE=recommendations_queue_${TEST_RUN_ID}
-export TEST_HISTORICAL_DATA_QUEUE=historical_data_queue_${TEST_RUN_ID}
+export TEST_VHOST=test_env_${TEST_RUN_ID}
+export TEST_EXCHANGE=user_actions_exchange
+export TEST_PROCESSED_EVENTS_QUEUE=processed_events_queue
+export TEST_RECOMMENDATIONS_QUEUE=recommendations_queue
+export TEST_HISTORICAL_DATA_QUEUE=historical_data_queue
 EOF
   
   # Source the environment variables
   source .test_env
   
-  echo "Test environment ready with ID: ${TEST_RUN_ID}"
+  echo "Test environment ready with isolated vhost: test_env_${TEST_RUN_ID}"
 }
 
 function setup_rabbitmq_queues() {
-  echo "Setting up RabbitMQ with unique ID: ${TEST_RUN_ID}..."
+  echo "Setting up RabbitMQ with production configuration..."
   
-  # Use unique names for exchange and queues
-  export TEST_EXCHANGE="user_actions_exchange_${TEST_RUN_ID}"
-  export TEST_PROCESSED_EVENTS_QUEUE="processed_events_queue_${TEST_RUN_ID}"
-  export TEST_RECOMMENDATIONS_QUEUE="recommendations_queue_${TEST_RUN_ID}"
-  export TEST_HISTORICAL_DATA_QUEUE="historical_data_queue_${TEST_RUN_ID}"
+  # Use unique vhost for complete isolation
+  export TEST_VHOST="test_env_${TEST_RUN_ID}"
   
-  # Create exchange
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare exchange \
-    name=${TEST_EXCHANGE} type=topic durable=true || true
+  # Create test vhost with isolation guarantees
+  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqctl add_vhost ${TEST_VHOST}
+  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqctl set_permissions -p ${TEST_VHOST} guest ".*" ".*" ".*"
   
-  # Create queues
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare queue \
-    name=${TEST_PROCESSED_EVENTS_QUEUE} durable=true || true
+  # Export the vhost for the setup script
+  export TEST_VHOST=${TEST_VHOST}
+  export TEST_RUN_ID=${TEST_RUN_ID}
   
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare queue \
-    name=${TEST_RECOMMENDATIONS_QUEUE} durable=true || true
+  # Run the updated setup script with isolation
+  bash setup-test-queues.sh
   
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare queue \
-    name=${TEST_HISTORICAL_DATA_QUEUE} durable=true || true
-  
-  # Create bindings
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare binding \
-    source=${TEST_EXCHANGE} destination=${TEST_PROCESSED_EVENTS_QUEUE} routing_key="event.processed.#" || true
-  
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare binding \
-    source=${TEST_EXCHANGE} destination=${TEST_RECOMMENDATIONS_QUEUE} routing_key="recommendation.result.#" || true
-  
-  docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin declare binding \
-    source=${TEST_EXCHANGE} destination=${TEST_HISTORICAL_DATA_QUEUE} routing_key="historical.data.#" || true
-}
-
-function cleanup_test_environment() {
-  if [ -f .test_run_id ]; then
-    local test_run_id=$(cat .test_run_id)
-    echo "Cleaning up test environment with ID: ${test_run_id}..."
-    
-    # Source the environment variables if they exist
-    if [ -f .test_env ]; then
-      source .test_env
-    fi
-    
-    # Clean up RabbitMQ resources
-    local exchange="user_actions_exchange_${test_run_id}"
-    local processed_queue="processed_events_queue_${test_run_id}"
-    local recommendations_queue="recommendations_queue_${test_run_id}"
-    local historical_queue="historical_data_queue_${test_run_id}"
-    
-    docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin delete queue name=${processed_queue} || true
-    docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin delete queue name=${recommendations_queue} || true
-    docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin delete queue name=${historical_queue} || true
-    docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqadmin delete exchange name=${exchange} || true
-    
-    # Stop containers
-    docker-compose -f docker-compose-test.yml down
-    
-    # Remove temporary files
-    rm -f .test_run_id .test_env
-  else
-    # Standard cleanup
-    docker-compose -f docker-compose-test.yml down --remove-orphans
+  # Source the generated environment
+  if [ -f .test-queues-env ]; then
+    source .test-queues-env
+    echo "Loaded isolated test environment for vhost: ${TEST_VHOST}"
   fi
 }
 
+function cleanup_test_environment() {
+  local test_run_id=${TEST_RUN_ID}
+  local test_vhost="test_env_${test_run_id}"
+  
+  if [ -n "$test_run_id" ]; then
+    echo "Cleaning up test environment with ID: ${test_run_id}..."
+    
+    # Vérifier si RabbitMQ est en cours d'exécution avant de nettoyer
+    if docker-compose -f docker-compose-test.yml ps test-rabbitmq 2>/dev/null | grep -q "Up"; then
+      echo "Cleaning up RabbitMQ vhost: ${test_vhost}..."
+      # Delete the entire vhost for complete cleanup
+      docker-compose -f docker-compose-test.yml exec -T test-rabbitmq rabbitmqctl delete_vhost ${test_vhost} 2>/dev/null || true
+    else
+      echo "RabbitMQ not running, skipping queue cleanup (normal for unit tests)"
+    fi
+  fi
+  
+  # Arrêter les conteneurs (s'ils existent)
+  docker-compose -f docker-compose-test.yml down --remove-orphans 2>/dev/null || true
+  
+  # Nettoyer les fichiers temporaires
+  rm -f .test_run_id .test_env .test-queues-env
+}
+
 function run_test() {
-  local test_class=$1
+  local test_pattern=$1
   local debug_args=$2
   
-  echo "Running test: $test_class with TEST_RUN_ID=${TEST_RUN_ID}"
+  echo "Running test: $test_pattern with TEST_RUN_ID=${TEST_RUN_ID}"
   
-  # Pass all the test environment variables to the container
-  docker-compose -f docker-compose-test.yml run \
-    --rm \
-    --env TEST_RUN_ID=${TEST_RUN_ID} \
-    --env TEST_EXCHANGE=${TEST_EXCHANGE} \
-    --env TEST_PROCESSED_EVENTS_QUEUE=${TEST_PROCESSED_EVENTS_QUEUE} \
-    --env TEST_RECOMMENDATIONS_QUEUE=${TEST_RECOMMENDATIONS_QUEUE} \
-    --env TEST_HISTORICAL_DATA_QUEUE=${TEST_HISTORICAL_DATA_QUEUE} \
-    --env DOCKER_HOST=unix:///var/run/docker.sock \
-    --env TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
-    --env TESTCONTAINERS_RYUK_DISABLED=true \
-    --env TEST_MODE=true \
-    --env TEST_MOCKING=false \
-    -v "$COLIMA_SOCKET:/var/run/docker.sock" \
-    test-runner \
-    sbt "-Dtest.runId=${TEST_RUN_ID} -Dtest.mode=true -Dtest.enableMocking=false -Dconfig.resource=application-test.conf $debug_args" "testOnly $test_class"
-    
-  return $?
+  # Pour les tests unitaires, pas besoin de conteneurs
+  if [[ "$test_pattern" == "unit."* ]]; then
+    # Test unitaire - utiliser sbt directement dans le conteneur
+    docker-compose -f docker-compose-test.yml run \
+      --rm \
+      --no-deps \
+      --env TEST_RUN_ID=${TEST_RUN_ID} \
+      test-runner \
+      sbt "testOnly $test_pattern"
+  else
+    # Test d'intégration - utiliser tous les services avec vhost
+    docker-compose -f docker-compose-test.yml run \
+      --rm \
+      --env TEST_RUN_ID=${TEST_RUN_ID} \
+      --env TEST_VHOST=${TEST_VHOST:-test_env_${TEST_RUN_ID}} \
+      --env TEST_EXCHANGE=${TEST_EXCHANGE} \
+      --env TEST_PROCESSED_EVENTS_QUEUE=${TEST_PROCESSED_EVENTS_QUEUE} \
+      --env TEST_RECOMMENDATIONS_QUEUE=${TEST_RECOMMENDATIONS_QUEUE} \
+      --env TEST_HISTORICAL_DATA_QUEUE=${TEST_HISTORICAL_DATA_QUEUE} \
+      test-runner \
+      sbt "testOnly $test_pattern"
+  fi
 }
 
 # Main script execution starts here
@@ -328,12 +317,29 @@ else
   # Clean up any existing containers unless using existing env
   cleanup_containers
   
-  # Only start containers for integration and functional tests
-  if [[ "$TEST_TYPE" == "integration"* || "$TEST_TYPE" == "functional"* || "$TEST_TYPE" == "all" || "$TEST_TYPE" == "tag:RabbitMQTest" || "$TEST_TYPE" == "tag:DatabaseTest" ]]; then
+  # Déterminer si on a besoin de conteneurs
+  NEEDS_CONTAINERS=false
+  case "$TEST_TYPE" in
+    "integration"*|"functional"*|"all"|"tag:RabbitMQTest"|"tag:DatabaseTest")
+      NEEDS_CONTAINERS=true
+      ;;
+    "component:"*)
+      NEEDS_CONTAINERS=true
+      ;;
+    "specific:"*)
+      # Check if the specific test is an integration test
+      if [[ "$TEST_TYPE" == *"integration."* || "$TEST_TYPE" == *"functional."* || "$TEST_TYPE" == *"Messaging"* ]]; then
+        NEEDS_CONTAINERS=true
+      fi
+      ;;
+  esac
+  
+  if [ "$NEEDS_CONTAINERS" = true ]; then
     setup_test_environment
   else
-    # For unit tests, just generate an ID
+    # Pour les tests unitaires, juste générer un ID
     generate_test_run_id
+    echo "Skipping container setup for unit tests"
   fi
 fi
 
@@ -355,7 +361,20 @@ case $TEST_TYPE in
     run_test "integration.**" "$DEBUG_ARGS"
     ;;
   "integration:db")
-    run_test "integration.db.**" "$DEBUG_ARGS"
+    print_info "Running database integration tests with conditional tests enabled..."
+    docker-compose -f docker-compose-test.yml exec -T test-runner \
+      bash -c "
+        # Test direct connection first
+        echo 'Testing database connection...'
+        PGPASSWORD=test_password psql -h test-db -U postgres -d test_recommendation_engine -c 'SELECT 1' && 
+        # Run the tests with increased timeouts
+        sbt -Dtest.database.enabled=true \
+            -Dtest.mode=true \
+            -Dtest.database.timeout=60000 \
+            -Dconfig.resource=application-test.conf \
+            'Test/testOnly integration.db.**'
+      "
+    exit_code=$?
     ;;
   "integration:msg")
     run_test "integration.messaging.**" "$DEBUG_ARGS"
@@ -376,7 +395,15 @@ case $TEST_TYPE in
     run_test "**/application/core/Recommender*Spec" "$DEBUG_ARGS"
     ;;
   "component:datamanager")
-    run_test "**/application/core/DataManager*Spec" "$DEBUG_ARGS"
+    # Tests unitaires et d'intégration pour DataManager
+    echo "Running DataManager unit tests..."
+    run_test "unit.application.core.DataManagerSpec" "$DEBUG_ARGS"
+    
+    # Optionnel: ajouter les tests d'intégration si ils existent
+    if [ "$1" == "--include-integration" ]; then
+      echo "Running DataManager integration tests..."
+      run_test "integration.db.DataManager*" "$DEBUG_ARGS"
+    fi
     ;;
   "component:pipeline")
     run_test "**/application/core/Pipeline*Spec" "$DEBUG_ARGS"

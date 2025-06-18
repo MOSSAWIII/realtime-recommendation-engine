@@ -1,11 +1,13 @@
 package common.utils
 
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Gestionnaire de ressources de test pour garantir l'unicité des identifiants
  */
 object TestResourceManager {
+  private val idCounter = new AtomicLong(1000L)
   
   /**
    * Génère un nom de queue unique avec préfixe pour tests RabbitMQ
@@ -25,7 +27,14 @@ object TestResourceManager {
    * Génère un identifiant unique pour les ressources de test
    */
   def uniqueId(): Long = {
-    System.currentTimeMillis() + scala.util.Random.nextInt(1000000)
+    idCounter.getAndIncrement()
+  }
+  
+  /**
+   * Réinitialise le compteur d'identifiants uniques
+   */
+  def reset(): Unit = {
+    idCounter.set(1000L)
   }
 }
 

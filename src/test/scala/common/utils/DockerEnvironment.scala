@@ -1,4 +1,3 @@
-// filepath: src/test/scala/common/utils/DockerEnvironment.scala
 package common.utils
 
 import scala.util.Try

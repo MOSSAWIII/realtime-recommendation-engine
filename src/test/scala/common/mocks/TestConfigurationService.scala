@@ -34,4 +34,9 @@ class TestConfigurationService(testConfig: Config = ConfigFactory.load("applicat
     this.currentConfig = newConfig
     this
   }
+  
+  // Ajouter ces méthodes pour supporter les tests d'intégration
+  def getDatabaseUrl(): String = "jdbc:postgresql://localhost:5433/test_recommendation_engine"
+  def getDatabaseUser(): String = "postgres"
+  def getDatabasePassword(): String = "test_password"
 }

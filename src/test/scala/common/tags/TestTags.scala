@@ -15,6 +15,7 @@ object TestTags {
   object DatabaseTest extends Tag("DatabaseTest")
   object RabbitMQTest extends Tag("RabbitMQTest")
   object HttpTest extends Tag("HttpTest")
+  object ConditionalDatabaseTest extends Tag("ConditionalDatabaseTest")
   
   // Dépendances entre tests
   object Sequential extends Tag("Sequential")

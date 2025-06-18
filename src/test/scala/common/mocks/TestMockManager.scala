@@ -7,16 +7,22 @@ import scala.collection.mutable.{Map => MutableMap, ListBuffer}
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
 import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider}
-import com.typesafe.config.{Config, ConfigFactory}  // Ajout de Config
+import com.typesafe.config.{Config, ConfigFactory}
 import domain.models._
 import java.util.concurrent.CountDownLatch
+import org.slf4j.LoggerFactory
+import scala.util.{Try, Success, Failure}
+import scala.concurrent.duration._
 
 /**
  * Unified mock manager for all test mocks
  */
 object TestMockManager {
-  // Test execution context
-  val testExecutionContext: ExecutionContext = ExecutionContext.global
+  private val logger = LoggerFactory.getLogger(getClass)
+  private var connection: Option[Connection] = None
+
+  // Ajouter ExecutionContext implicite global
+  implicit val testExecutionContext: ExecutionContext = ExecutionContext.global
   
   // ======= Database Mocks =======
   def mockDatabaseConnection(): SqlConnection = {
@@ -33,18 +39,25 @@ object TestMockManager {
   
   // ======= RabbitMQ Mocks =======
   private val channels = MutableMap[String, Channel]()
-  private var connection: Option[Connection] = None
   
   // Constants
   object Exchanges {
-    val USER_ACTIONS = "user_actions_exchange"
+    val USER_ACTIONS = "user_actions_exchange"  // Same as production
   }
   
   object Queues {
     val RAW_EVENTS = "raw_events_queue"
-    val PROCESSED_EVENTS = "processed_events_queue"
-    val RECOMMENDATIONS = "recommendations_queue"
-    val HISTORICAL_DATA = "historical_data_queue"
+    val PROCESSED_EVENTS = "processed_events_queue"  // Remove test_ prefix
+    val RECOMMENDATIONS = "recommendations_queue"    // Remove test_ prefix
+    val RECOMMENDATION_REQUESTS = "recommendation_requests_queue"
+    val HISTORICAL_DATA = "historical_data_queue"   // Same as production
+  }
+
+  object RoutingKeys {
+    val PROCESSED_EVENTS = "event.processed.#"
+    val RECOMMENDATIONS = "recommendation.result.#"
+    val HISTORICAL_DATA = "historical.data.#"
+    val USER_ACTIONS = "user.actions.#"  // Add missing routing key
   }
   
   def mockRabbitMQChannel(): Channel = {
@@ -58,25 +71,82 @@ object TestMockManager {
     org.mockito.Mockito.mock(classOf[Connection])
   }
   
-  def initConnection(host: String = "localhost", port: Int = 5673): Unit = {
+  def createConnection(): Connection = {
     val factory = new ConnectionFactory()
-    factory.setHost(host)
-    factory.setPort(port)
-    connection = Some(factory.newConnection())
+    factory.setHost(sys.env.getOrElse("RABBITMQ_HOST", "test-rabbitmq"))
+    factory.setPort(sys.env.getOrElse("RABBITMQ_PORT", "5672").toInt)
+    factory.setUsername("guest")
+    factory.setPassword("guest")
+    
+    // Use test vhost from environment
+    val testVHost = sys.env.getOrElse("TEST_VHOST", "/")
+    factory.setVirtualHost(testVHost)
+    
+    logger.info(s"Connecting to RabbitMQ with vhost: $testVHost")
+    
+    factory.newConnection()
+  }
+  
+  def initConnection(): Unit = {
+    val maxRetries = 10
+    val retryDelay = 2.seconds
+    
+    def attemptConnection(attempt: Int): Unit = {
+      if (attempt > maxRetries) {
+        throw new RuntimeException(s"Failed to connect to RabbitMQ after $maxRetries attempts")
+      }
+      
+      Try {
+        val factory = new ConnectionFactory()
+        // Try different host configurations
+        val hosts = List("test-rabbitmq", "localhost", "127.0.0.1")
+        val ports = List(5673, 5672) // Test port first, then default
+        
+        var connected = false
+        for (host <- hosts if !connected; port <- ports if !connected) {
+          Try {
+            factory.setHost(host)
+            factory.setPort(port)
+            factory.setUsername("guest")
+            factory.setPassword("guest")
+            factory.setConnectionTimeout(5000)
+            factory.setRequestedHeartbeat(30)
+            
+            logger.info(s"Attempting to connect to RabbitMQ at $host:$port (attempt $attempt)")
+            factory.newConnection()
+          } match {
+            case Success(conn) =>
+              connection = Some(conn)
+              connected = true
+              logger.info(s"Successfully connected to RabbitMQ at $host:$port")
+            case Failure(e) =>
+              logger.warn(s"Failed to connect to $host:$port: ${e.getMessage}")
+          }
+        }
+        
+        if (!connected) {
+          throw new RuntimeException("Could not connect to any RabbitMQ host")
+        }
+      } match {
+        case Success(_) => // Connection successful
+        case Failure(e) =>
+          logger.warn(s"Connection attempt $attempt failed: ${e.getMessage}")
+          Thread.sleep(retryDelay.toMillis)
+          attemptConnection(attempt + 1)
+      }
+    }
+    
+    attemptConnection(1)
   }
   
   def createChannel(name: String): Channel = {
-    if (channels.contains(name)) {
-      return channels(name)
+    connection match {
+      case Some(conn) if conn.isOpen => 
+        conn.createChannel()
+      case _ => 
+        initConnection()
+        connection.get.createChannel()
     }
-    
-    val channel = mock(classOf[Channel])
-    // Setup basic mocking
-    when(channel.isOpen).thenReturn(true)
-    doNothing().when(channel).basicPublish(anyString(), anyString(), any(), any())
-    
-    channels.put(name, channel)
-    channel
   }
   
   def getChannel(name: String): Option[Channel] = {
@@ -102,8 +172,10 @@ object TestMockManager {
   }
   
   def cleanup(): Unit = {
-    closeAllChannels()
-    connection.foreach(conn => try { conn.close() } catch { case _: Exception => })
+    connection.foreach { conn =>
+      Try(conn.close())
+      logger.info("TestMockManager connection closed")
+    }
     connection = None
   }
   
@@ -112,7 +184,7 @@ object TestMockManager {
     val configService: infrastructure.config.ConfigurationServiceInterface = new MockConfigService(),
     val dbProvider: infrastructure.config.DatabaseConfigProvider = new MockDatabaseProvider(),
     val latch: CountDownLatch = null
-  )(implicit val ec: ExecutionContext) extends application.core.DataManager(configService, dbProvider) {
+  )(implicit val ec: ExecutionContext = testExecutionContext) extends application.core.DataManager(configService, dbProvider)(ec) {
     
     // Maps pour stocker les données mockées
     private val mockEvents = MutableMap[Long, ListBuffer[ProcessedEvent]]()
@@ -219,6 +291,16 @@ object TestMockManager {
     // Autres composants...
     
     (configService, dbProvider)
+  }
+  
+  // Autres méthodes factory
+  def createMockDataManager(withLatch: Boolean = false): MockDataManager = {
+    val latch = if (withLatch) new CountDownLatch(1) else null
+    new MockDataManager(
+      new MockConfigService(),
+      new MockDatabaseProvider(),
+      latch
+    )(testExecutionContext)
   }
 }
 

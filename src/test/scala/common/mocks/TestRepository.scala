@@ -10,12 +10,12 @@ class TestRepository(
   val configService: ConfigurationServiceInterface = new common.mocks.TestConfigurationService(),
   val dbProvider: DatabaseConfigProvider = new common.mocks.TestDatabaseProvider()
 )(implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global) 
-  extends DataManager(configService, dbProvider) {
+  extends DataManager(configService, dbProvider)(ec) {
   
   private val logger = LoggerFactory.getLogger(getClass)
   
-  // Délégation à MockDataManager pour rester compatible avec l'ancien code
-  private val mockDataManager = new MockDataManager(configService, dbProvider)
+  // Délégation à MockDataManager avec ExecutionContext
+  private val mockDataManager = new MockDataManager(configService, dbProvider)(ec)
   
   // Support pour les anciennes données mockées
   var mockUserProfile: Option[User] = None

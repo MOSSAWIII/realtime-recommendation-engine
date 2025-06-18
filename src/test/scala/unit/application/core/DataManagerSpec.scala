@@ -2,7 +2,7 @@ package unit.application.core
 
 import application.core.DataManager
 import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider, DatabaseConfigSection, DataManagerConfigSection}
-import utils.error.DatabaseException  // Correction de l'import
+import utils.error.DatabaseException
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import org.mockito.Mockito.{mock, when}
 import org.mockito.ArgumentMatchers.any
@@ -28,16 +28,22 @@ class DataManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach 
     val mockPreparedStatement = mock(classOf[PreparedStatement])
     val mockResultSet = mock(classOf[ResultSet])
     
-    // Simulation comportement
+    // Configuration des mocks pour simuler une exception SQL
     when(mockDbProvider.getConnection()).thenReturn(mockConnection)
     when(mockConnection.prepareStatement(any[String])).thenReturn(mockPreparedStatement)
-    when(mockPreparedStatement.executeQuery()).thenReturn(mockResultSet)
-    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mock(classOf[DatabaseConfigSection]))
+    when(mockPreparedStatement.executeQuery()).thenThrow(new java.sql.SQLException("Test SQL exception"))
+    
+    // Configuration des sections de config
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
     
     // Instanciation avec les deux paramètres requis
     val dataManager = new DataManager(mockConfigService, mockDbProvider)
     
-    // Test de l'exception avec ScalaFutures
+    // Test de l'exception avec ScalaFutures - correction: utiliser recoverToSucceededIf
     import scala.concurrent.duration._
     whenReady(dataManager.getUserProfile(1).failed, timeout(5.seconds)) { e =>
       e shouldBe a[DatabaseException]
@@ -49,32 +55,47 @@ class DataManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach 
     val mockConfigService = mock(classOf[ConfigurationServiceInterface])
     val mockDbProvider = mock(classOf[DatabaseConfigProvider])
     
+    // Simuler une erreur de connexion BD
     when(mockDbProvider.getConnection()).thenThrow(new RuntimeException("Test DB connection error"))
+    
+    // Configuration des sections de config
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
     
     // Fournir tous les paramètres requis
     val dataManager = new DataManager(mockConfigService, mockDbProvider)
     
-    // Utiliser ScalaFutures.whenReady avec recoverToExceptionIf
+    // Utiliser ScalaFutures.whenReady avec recoverToExceptionIf - correction: tester que c'est bien une DatabaseException
     import scala.concurrent.duration._
-    whenReady(dataManager.getProcessedEventsForUser(123L).failed) { e =>
+    whenReady(dataManager.getProcessedEventsForUser(123L).failed, timeout(5.seconds)) { e =>
       e shouldBe a[DatabaseException]
+      e.getMessage should include("Test DB connection error")
     }
   }
   
   it should "handle database errors gracefully" in {
-    // Spécifier explicitement le type pour éviter l'ambiguïté
     val mockConfigService = mock(classOf[ConfigurationServiceInterface])
     val mockDbProvider = mock(classOf[DatabaseConfigProvider])
-    val mockConnection = mock(classOf[Connection])
+    
+    // Configuration des sections de config
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
     
     when(mockDbProvider.getConnection()).thenThrow(new RuntimeException("DB Error"))
     
     // Fournir tous les paramètres requis
     val dataManager = new DataManager(mockConfigService, mockDbProvider)
     
-    // Utiliser whenReady avec pattern matching
-    whenReady(dataManager.initTables().failed) { exception =>
+    // Utiliser whenReady avec pattern matching - correction: tester initTables au lieu de getProcessedEventsForUser
+    whenReady(dataManager.initTables().failed, timeout(5.seconds)) { exception =>
       exception shouldBe a[DatabaseException]
+      exception.getMessage should include("DB Error")
     }
   }
   
@@ -143,6 +164,61 @@ class DataManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach 
     invalidateCacheMethod.invoke(dataManager, "user", 123L)
     val afterInvalidate = getCacheMethod.invoke(dataManager, "user", 123L)
     afterInvalidate shouldBe None
+  }
+  
+  it should "handle successful database operations" in {
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
+    val mockConnection = mock(classOf[Connection])
+    val mockPreparedStatement = mock(classOf[PreparedStatement])
+    val mockResultSet = mock(classOf[ResultSet])
+    
+    // Configuration des sections de config
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
+    
+    // Simuler une opération réussie
+    when(mockDbProvider.getConnection()).thenReturn(mockConnection)
+    when(mockConnection.prepareStatement(any[String])).thenReturn(mockPreparedStatement)
+    when(mockPreparedStatement.executeQuery()).thenReturn(mockResultSet)
+    when(mockResultSet.next()).thenReturn(false) // Pas de résultats
+    
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    
+    // Test d'une opération qui devrait réussir
+    whenReady(dataManager.getUserProfile(1), timeout(5.seconds)) { result =>
+      result shouldBe None // Pas d'utilisateur trouvé, mais pas d'exception
+    }
+  }
+  
+  it should "pass health check with all mocked dependencies" in {
+    val mockConfigService = mock(classOf[ConfigurationServiceInterface])
+    val mockDbProvider = mock(classOf[DatabaseConfigProvider])
+    val mockConnection = mock(classOf[Connection])
+    val mockStatement = mock(classOf[PreparedStatement])
+    val mockResultSet = mock(classOf[ResultSet])
+    
+    // Configuration des sections de config
+    val mockDbConfig = mock(classOf[DatabaseConfigSection])
+    when(mockConfigService.get[DatabaseConfigSection](any())).thenReturn(mockDbConfig)
+    
+    val mockDataMgrConfig = mock(classOf[DataManagerConfigSection])
+    when(mockConfigService.get[DataManagerConfigSection](any())).thenReturn(mockDataMgrConfig)
+    
+    // Simuler une connexion saine
+    when(mockDbProvider.getConnection()).thenReturn(mockConnection)
+    when(mockConnection.prepareStatement("SELECT 1")).thenReturn(mockStatement)
+    when(mockStatement.executeQuery()).thenReturn(mockResultSet)
+    when(mockResultSet.next()).thenReturn(true)
+    
+    val dataManager = new DataManager(mockConfigService, mockDbProvider)
+    
+    // Test de santé
+    val isHealthy = dataManager.healthCheck()
+    isHealthy shouldBe true
   }
 }
 

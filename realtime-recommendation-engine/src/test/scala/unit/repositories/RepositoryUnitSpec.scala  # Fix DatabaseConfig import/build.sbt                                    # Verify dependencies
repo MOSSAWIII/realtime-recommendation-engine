@@ -1,9 +1,0 @@
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import your.package.path.DatabaseConfig
-
-class RepositoryUnitSpec extends AnyFlatSpec with Matchers {
-  "DatabaseConfig" should "be properly imported" in {
-    DatabaseConfig should not be null
-  }
-}

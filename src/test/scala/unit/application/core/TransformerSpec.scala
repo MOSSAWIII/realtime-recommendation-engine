@@ -11,6 +11,7 @@ import common.base.UnitSpec
 import common.mocks.TestConfigurationService
 import common.mocks.TestDatabaseProvider
 import scala.concurrent.ExecutionContext
+import scala.collection.mutable.ListBuffer
 
 class TransformerSpec extends UnitSpec {
   override implicit val ec: ExecutionContext = ExecutionContext.global
@@ -69,7 +70,7 @@ class TransformerSpec extends UnitSpec {
     
     protected def setupPublishChannel() = null
     
-    override def publishProcessedEvent(event: ProcessedEvent): Unit = {
+    def publishProcessedEvent(event: ProcessedEvent): Unit = {
       // Do nothing in tests - don't publish to RabbitMQ
     }
     
@@ -79,6 +80,22 @@ class TransformerSpec extends UnitSpec {
     
     override def close(): Unit = {
       // Do nothing in tests - no channels to close
+    }
+  }
+
+  class MockTransformerForTest(
+    dataManager: DataManager
+  )(implicit ec: ExecutionContext) extends Transformer(dataManager)(ec) {
+    
+    var publishedEvents = ListBuffer[ProcessedEvent]()
+    var publishError: Option[Exception] = None
+    
+    // Si vous avez besoin de tester la publication, utilisez une méthode différente
+    def simulatePublish(event: ProcessedEvent): Unit = {
+      publishedEvents += event
+      if (publishError.isDefined) {
+        throw publishError.get
+      }
     }
   }
 }

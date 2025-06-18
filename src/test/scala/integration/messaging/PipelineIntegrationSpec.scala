@@ -14,10 +14,13 @@ import application.core.{Transformer, Recommender}
 import domain.models._
 import common.base.RabbitMQTestBase
 import common.utils.TestResourceManager
-import common.mocks.MockDataManager
+import common.mocks.{MockDataManager, TestConfigurationService, TestDatabaseProvider, MockFactory}
 import common.fixtures.TestDataFactory
+import common.base.MessagingTestBase
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.BeforeAndAfterAll
 
-class PipelineIntegrationSpec extends RabbitMQTestBase {
+class PipelineIntegrationSpec extends MessagingTestBase with Matchers with BeforeAndAfterAll {
   private val logger = LoggerFactory.getLogger(getClass)
 
   // Test data avec ID uniques
@@ -27,15 +30,12 @@ class PipelineIntegrationSpec extends RabbitMQTestBase {
   // Promise to track recommendation publication
   private var recommendationPromise: Promise[Recommendation] = Promise[Recommendation]()
   private var consumerTag: String = _
-  private var recommendationChannel: com.rabbitmq.client.Channel = _
   
   override def beforeAll(): Unit = {
-    super.beforeAll()
-    
     // Use testExchange from RabbitMQTestBase instead of a hardcoded value
     logger.info(s"Setting up test with exchange: $testExchange and queue: $testQueueName")
     
-    // Create recommendation channel
+    // Create recommendation channel using the inherited method
     recommendationChannel = createTestChannel("recommendation-channel")
     
     // Create an isolated queue for this test
@@ -49,6 +49,17 @@ class PipelineIntegrationSpec extends RabbitMQTestBase {
     
     // Set up listener
     setupRecommendationListener(queueName)
+  }
+  
+  override def beforeEach(): Unit = {
+    super.beforeEach()
+    logger.info(s"Setting up test with exchange: $testExchange and queue: $testQueueName")
+    
+    // Utiliser les méthodes héritées
+    recommendationChannel = createTestChannel("recommendation-channel")
+    val queueName = createIsolatedQueue(recommendationChannel, "recommendation")
+    val routingKey = s"recommendation.result.${testId}"
+    recommendationChannel.queueBind(queueName, testExchange, routingKey)
   }
   
   private def setupRecommendationListener(queueName: String): Unit = {
@@ -99,7 +110,6 @@ class PipelineIntegrationSpec extends RabbitMQTestBase {
   
   override def afterAll(): Unit = {
     // Cleanup is handled by RabbitMQTestBase
-    super.afterAll()
   }
   
   "The recommendation pipeline" should "process user events and generate recommendations" in {
@@ -107,15 +117,18 @@ class PipelineIntegrationSpec extends RabbitMQTestBase {
     recommendationPromise = Promise[Recommendation]()
     
     // Create isolated components for this test
-    val mockDataManager = new MockDataManager()
-    val transformer = new Transformer(mockDataManager)
-    registerForCleanup(transformer)
-    val recommenderCloseable = new AutoCloseable {
-      override def close(): Unit = {
-        // Logique de nettoyage pour recommender
-      }
-    }
-    registerForCleanup(recommenderCloseable)
+    val mockDataManager = new MockDataManager(
+      new TestConfigurationService(),
+      new TestDatabaseProvider()
+    )(ec)
+    val transformer = new Transformer(mockDataManager)(ec)
+    registerForCleanup(new AutoCloseable {
+      override def close(): Unit = transformer.close() // Utiliser close() au lieu de shutdown()
+    })
+    val recommender = new Recommender(mockDataManager)(ec)
+    registerForCleanup(new AutoCloseable {
+      override def close(): Unit = recommender.close() // Utiliser close() au lieu de shutdown()
+    })
     
     // Test with unique IDs
     val event = TestDataFactory.createUserEvent(
@@ -145,6 +158,39 @@ class PipelineIntegrationSpec extends RabbitMQTestBase {
     // Verify recommendation
     recommendation.userId shouldBe testUserId
     recommendation.recommendedItems.nonEmpty shouldBe true
+  }
+  
+  "Pipeline Integration" should "process events through complete pipeline" in {
+    // Corriger MockDataManager avec ExecutionContext
+    val mockDataManager = new MockDataManager(
+      new TestConfigurationService(),
+      new TestDatabaseProvider()
+    )(ec)
+    
+    val transformer = new Transformer(mockDataManager)(ec)
+    val recommender = new Recommender(mockDataManager)(ec)
+    
+    registerForCleanup(transformer)
+    registerForCleanup(new AutoCloseable {
+      override def close(): Unit = recommender.close() // Utiliser close() au lieu de shutdown()
+    })
+    // ...rest of existing code...
+  }
+  
+  it should "handle end-to-end message flow" in {
+    val mockDataManager = new MockDataManager(
+      new TestConfigurationService(),
+      new TestDatabaseProvider()
+    )(ec)
+    
+    val transformer = new Transformer(mockDataManager)(ec)
+    val recommender = new Recommender(mockDataManager)(ec)
+    
+    registerForCleanup(transformer)
+    registerForCleanup(new AutoCloseable {
+      override def close(): Unit = recommender.close() // Utiliser close() au lieu de shutdown()
+    })
+    // ...rest of existing code...
   }
 }
 

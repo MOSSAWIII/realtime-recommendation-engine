@@ -110,7 +110,7 @@ class DataManager(
   private val LongCacheTTL = 30.minutes
 
   // Helper methods for caching
-  private def cacheKey(prefix: String, id: Any): String = s"$prefix-$id"
+  private def cacheKey(prefix: String, id: Any): String = s"$prefix:$id"
   
   private def getFromCache[T](prefix: String, id: Any): Option[T] = {
     val key = cacheKey(prefix, id)
@@ -129,34 +129,47 @@ class DataManager(
     }
   }
   
-  private def putInCache[T](prefix: String, id: Any, value: T, ttl: Duration = DefaultCacheTTL): T = {
-    val key = cacheKey(prefix, id)
-    val expiration = System.currentTimeMillis() + ttl.toMillis
-    cache.put(key, CacheEntry(value, expiration))
-    value
+  /**
+   * Helper method to store data in cache
+   */
+  private def putInCache[T](prefix: String, key: Any, value: T, ttl: scala.concurrent.duration.Duration): Unit = {
+    try {
+      val cacheKey = this.cacheKey(prefix, key)  // Use the cacheKey method instead of string interpolation
+      logger.debug(s"Adding to cache: $cacheKey with TTL $ttl ms")
+      cache.put(cacheKey, CacheEntry(value, System.currentTimeMillis() + ttl.toMillis))
+    } catch {
+      case e: Exception =>
+        logger.error(s"Error adding to cache: ${e.getMessage}", e)
+    }
   }
   
-  private def invalidateCache(prefix: String, id: Any): Unit = {
+  def invalidateCache(prefix: String, id: Any): Unit = {
     val key = cacheKey(prefix, id)
     cache.remove(key)
+  }
+
+  /**
+   * Clear the cache, primarily for testing purposes.
+   */
+  def clearCache(): Unit = {
+    cache.clear()
+    logger.debug("Cache cleared for testing")
   }
   
   // Méthodes utilitaires pour les opérations SQL
   /**
    * Helper method to execute operations with a prepared statement and clean up resources
    */
-  private def withPreparedStatement[T](conn: Connection, sql: String)(f: PreparedStatement => T): T = {
-    var stmt: PreparedStatement = null
+  private def withPreparedStatement[T](conn: Connection, sql: String)(block: PreparedStatement => T): T = {
+    val ps = conn.prepareStatement(sql)
     try {
-      stmt = conn.prepareStatement(sql)
-      f(stmt)
+      if (ps == null) {
+        throw new SQLException(s"Failed to create PreparedStatement for SQL: $sql")
+      }
+      block(ps)
     } finally {
-      if (stmt != null) {
-        try {
-          stmt.close()
-        } catch {
-          case e: SQLException => logger.warn(s"Error closing prepared statement: ${e.getMessage}")
-        }
+      if (ps != null) {
+        ps.close()
       }
     }
   }
@@ -193,71 +206,66 @@ class DataManager(
     }
   }
   
-  // Ajouter cette méthode à la classe DataManager
-
-  /**
-   * Exécute une opération de base de données avec une gestion d'erreur et des métriques
-   * @param operation La fonction à exécuter qui retourne un Future
-   * @return Future avec le résultat ou une DatabaseException en cas d'échec
-   */
-  private def withErrorHandling[T](operation: => Future[T]): Future[T] = {
-    try {
-      val startTime = System.currentTimeMillis()
-      val future = operation
-      
-      future.onComplete {
-        case Success(_) =>
-          val duration = System.currentTimeMillis() - startTime
-          // Enregistrer la métrique de durée d'opération
-        case Failure(e) =>
-          dataLoadErrorCounter.inc()
-          logger.error(s"Operation failed: ${e.getMessage}", e)
-      }
-      
-      future.recoverWith {
-        case e: SQLException =>
-          Future.failed(DatabaseException(
-            s"Database operation failed: ${e.getMessage}", 
-            e, 
-            Map("component" -> componentName)
-          ))
-        case e: Exception =>
-          Future.failed(DatabaseException(
-            s"Unexpected error during database operation: ${e.getMessage}", 
-            e, 
-            Map("component" -> componentName)
-          ))
-      }
+  private def handleDatabaseOperation[T](operation: => Future[T]): Future[T] = {
+    val future = try {
+      operation
     } catch {
-      case e: Exception =>
-        dataLoadErrorCounter.inc()
+      case e: SQLException =>
         Future.failed(DatabaseException(
-          s"Failed to execute operation: ${e.getMessage}", 
+          s"Database operation failed: ${e.getMessage}", 
+          e, 
+          Map("component" -> componentName)
+        ))
+      case e: Exception =>
+        Future.failed(DatabaseException(
+          s"Unexpected error during database operation: ${e.getMessage}", 
+          e, 
+          Map("component" -> componentName)
+        ))
+    }
+    
+    future.recoverWith {
+      case e: SQLException =>
+        Future.failed(DatabaseException(
+          s"Database operation failed: ${e.getMessage}", 
+          e, 
+          Map("component" -> componentName)
+        ))
+      case e: Exception =>
+        Future.failed(DatabaseException(
+          s"Unexpected error during database operation: ${e.getMessage}", 
           e, 
           Map("component" -> componentName)
         ))
     }
   }
-  
+
   // CRUD operations for User
   
   /**
-   * Get user by ID
+   * Get user profile with all related information
    */
   def getUserProfile(userId: Long): Future[Option[User]] = {
     getFromCache[Option[User]]("user", userId) match {
-      case Some(cachedUser) => Future.successful(cachedUser)
-      case None => 
+      case Some(cachedUser) => 
+        logger.debug(s"Using cached user profile for user $userId")
+        Future.successful(cachedUser)
+      case None =>
+        logger.debug(s"Cache miss for user $userId, fetching from database")
         txManager.withTransaction { conn =>
           val sql = "SELECT * FROM users WHERE user_id = ?"
+          
           withPreparedStatement(conn, sql) { ps =>
             ps.setLong(1, userId)
+            
             withResultSet(ps) { rs =>
               val user = if (rs.next()) {
                 Some(mapResultSetToUser(rs))
               } else {
                 None
               }
+              
+              // Make sure to store in cache, even if None
               putInCache("user", userId, user, ShortCacheTTL)
               user
             }
@@ -305,6 +313,7 @@ class DataManager(
             val updatedUser = user.copy(userId = newId)
             // Invalidate cache
             invalidateCache("user", newId)
+            putInCache("user", newId, Some(updatedUser), LongCacheTTL)
             updatedUser
           } else {
             user
@@ -315,42 +324,245 @@ class DataManager(
   }
   
   /**
-   * Get users by IDs (batch operation)
+   * Update a user
+   */
+  def updateUser(user: User): Future[User] = {
+    txManager.withTransaction { conn =>
+      val sql = "UPDATE users SET name = ?, email_address = ?, locale = ?, birth_year = ?, gender = ?, location = ?, timezone = ?, is_generated = ? WHERE user_id = ?"
+      
+      withPreparedStatement(conn, sql) { ps =>
+        ps.setString(1, user.name.orNull)                    // Fix: use .orNull for Option[String]
+        ps.setString(2, user.emailAddress.orNull)           // Fix: use emailAddress instead of email
+        ps.setString(3, user.locale)
+        user.birthYear match {
+          case Some(year) => ps.setInt(4, year)
+          case None => ps.setNull(4, java.sql.Types.INTEGER)
+        }
+        ps.setString(5, user.gender.orNull)
+        ps.setString(6, user.location.orNull)
+        user.timezone match {
+          case Some(tz) => ps.setInt(7, tz)
+          case None => ps.setNull(7, java.sql.Types.INTEGER)
+        }
+        ps.setBoolean(8, user.isGenerated)
+        ps.setLong(9, user.userId)
+        
+        val rowsUpdated = ps.executeUpdate()
+        
+        if (rowsUpdated > 0) {
+          // Update cache
+          putInCache("user", user.userId, Some(user), LongCacheTTL)
+          user
+        } else {
+          throw new SQLException(s"User with ID ${user.userId} not found for update")
+        }
+      }
+    }
+  }
+  
+  /**
+   * Create a new user
+   */
+  def createUser(user: User): Future[User] = {
+    txManager.withTransaction { conn =>
+      val sql = "INSERT INTO users(name, email_address, locale, birth_year, gender, location, timezone, is_generated) VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING user_id"
+      
+      withPreparedStatement(conn, sql) { ps =>
+        ps.setString(1, user.name.orNull)           // Fix: use .orNull for Option[String]
+        ps.setString(2, user.emailAddress.orNull)   // Fix: use emailAddress instead of email
+        ps.setString(3, user.locale)
+        user.birthYear match {
+          case Some(year) => ps.setInt(4, year)
+          case None => ps.setNull(4, java.sql.Types.INTEGER)
+        }
+        ps.setString(5, user.gender.orNull)
+        ps.setString(6, user.location.orNull)
+        user.timezone match {
+          case Some(tz) => ps.setInt(7, tz)
+          case None => ps.setNull(7, java.sql.Types.INTEGER)
+        }
+        ps.setBoolean(8, user.isGenerated)
+        
+        withResultSet(ps) { rs =>
+          if (rs.next()) {
+            val userId = rs.getLong(1)
+            val createdUser = user.copy(userId = userId)
+            
+            // Cache the created user
+            putInCache("user", userId, Some(createdUser), LongCacheTTL)
+            
+            createdUser
+          } else {
+            throw new SQLException("Failed to create user - no ID returned")
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Get users by IDs in batch
    */
   def getUsersByIds(userIds: Seq[Long]): Future[Map[Long, User]] = {
     if (userIds.isEmpty) {
-      return Future.successful(Map.empty)
+      return Future.successful(Map.empty[Long, User])
     }
-    
-    // Check cache first
-    val fromCache = userIds.flatMap(id => getFromCache[Option[User]]("user", id).flatten.map(u => id -> u))
-    val cachedMap = fromCache.toMap
-    val missingIds = userIds.filterNot(cachedMap.contains)
-    
-    if (missingIds.isEmpty) {
-      return Future.successful(cachedMap)
+
+    // On vérifie d'abord le cache
+    val cachedUsers: Map[Long, User] = userIds.flatMap { id =>
+      getFromCache[Option[User]]("user", id).flatten.map(user => id -> user)
+    }.toMap
+
+    // Si on a trouvé tous les utilisateurs en cache, on retourne directement
+    if (cachedUsers.size == userIds.size) {
+      return Future.successful(cachedUsers)
     }
-    
-    // Fetch missing users
+
+    // On cherche les IDs qui ne sont pas dans le cache
+    val missingIds = userIds.filterNot(cachedUsers.contains)
+
+    // On charge depuis la DB les utilisateurs manquants
     txManager.withTransaction { conn =>
+      // On crée une requête avec des placeholders pour la clause IN
       val placeholders = missingIds.map(_ => "?").mkString(",")
       val sql = s"SELECT * FROM users WHERE user_id IN ($placeholders)"
       
+      logger.debug(s"Executing batch user query for ${missingIds.size} users: $sql")
+      
       withPreparedStatement(conn, sql) { ps =>
-        missingIds.zipWithIndex.foreach { case (id, i) =>
-          ps.setLong(i + 1, id)
+        // On définit chaque ID comme paramètre
+        missingIds.zipWithIndex.foreach { case (id, index) =>
+          ps.setLong(index + 1, id)
+          logger.debug(s"Setting parameter ${index + 1} to user ID: $id")
         }
         
         withResultSet(ps) { rs =>
-          val users = scala.collection.mutable.Map.empty[Long, User]
+          // On charge tous les utilisateurs trouvés dans la DB
+          var dbUsers = Map.empty[Long, User]
           while (rs.next()) {
             val user = mapResultSetToUser(rs)
-            users(user.userId) = user
-            putInCache("user", user.userId, Some(user), ShortCacheTTL)
+            val userId = user.userId
+            dbUsers += (userId -> user)
+            
+            // On met aussi en cache les utilisateurs trouvés
+            putInCache("user", userId, Some(user), LongCacheTTL)
+            logger.debug(s"Retrieved user from DB: $userId")
           }
           
-          // Combine with cached results
-          cachedMap ++ users
+          logger.debug(s"Found ${dbUsers.size} users in DB, ${cachedUsers.size} in cache")
+          
+          // On combine avec les résultats du cache
+          cachedUsers ++ dbUsers
+        }
+      }
+    }
+  }
+
+  /**
+   * Batch get user profiles
+   */
+  def batchGetUserProfiles(userIds: List[Long]): Future[Map[Long, User]] = {
+    if (userIds.isEmpty) {
+      return Future.successful(Map.empty[Long, User])
+    }
+    
+    // Vérifier le cache d'abord
+    val cachedUsers = userIds.flatMap { userId =>
+      getFromCache[Option[User]]("user", userId) match {
+        case Some(Some(user)) => Some(userId -> user)
+        case _ => None
+      }
+    }.toMap
+    
+    val uncachedIds = userIds.filterNot(cachedUsers.contains)
+    
+    if (uncachedIds.isEmpty) {
+      Future.successful(cachedUsers)
+    } else {
+      txManager.withTransaction { conn =>
+        val placeholders = uncachedIds.map(_ => "?").mkString(",")
+        val sql = s"SELECT * FROM users WHERE user_id IN ($placeholders)"
+        
+        logger.debug(s"Executing batch user query for ${uncachedIds.size} users: $sql")
+        
+        withPreparedStatement(conn, sql) { ps =>
+          uncachedIds.zipWithIndex.foreach { case (userId, index) =>
+            ps.setLong(index + 1, userId)
+            logger.debug(s"Setting parameter ${index + 1} to user ID: $userId")
+          }
+          
+          withResultSet(ps) { rs =>
+            var dbUsers = Map.empty[Long, User]
+            while (rs.next()) {
+              val user = mapResultSetToUser(rs)
+              val userId = user.userId
+              dbUsers += (userId -> user)
+              
+              // Mettre en cache les utilisateurs trouvés
+              putInCache("user", userId, Some(user), LongCacheTTL)
+              logger.debug(s"Retrieved user from DB: $userId")
+            }
+            
+            logger.debug(s"Found ${dbUsers.size} users in DB, ${cachedUsers.size} in cache")
+            
+            // Combiner avec les résultats du cache
+            cachedUsers ++ dbUsers
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Batch get users
+   */
+  def batchGetUsers(userIds: List[Long]): Future[Map[Long, User]] = {
+    if (userIds.isEmpty) {
+      return Future.successful(Map.empty)
+    }
+
+    // Check cache first
+    val cachedUsers = userIds.flatMap { userId =>
+      getFromCache[Option[User]]("user", userId) match {
+        case Some(Some(user)) => Some(userId -> user)
+        case _ => None
+      }
+    }.toMap
+
+    val uncachedIds = userIds.filterNot(cachedUsers.contains)
+
+    if (uncachedIds.isEmpty) {
+      Future.successful(cachedUsers)
+    } else {
+      txManager.withTransaction { conn =>
+        val placeholders = uncachedIds.map(_ => "?").mkString(",")
+        val sql = s"SELECT * FROM users WHERE user_id IN ($placeholders)"
+        
+        logger.debug(s"Executing batch user query for ${uncachedIds.size} users: $sql")
+        
+        withPreparedStatement(conn, sql) { ps =>
+          uncachedIds.zipWithIndex.foreach { case (userId, index) =>
+            ps.setLong(index + 1, userId)
+            logger.debug(s"Setting parameter ${index + 1} to user ID: $userId")
+          }
+          
+          withResultSet(ps) { rs =>
+            var dbUsers = Map.empty[Long, User]
+            while (rs.next()) {
+              val user = mapResultSetToUser(rs)
+              val userId = user.userId
+              dbUsers += (userId -> user)
+              
+              // Put in cache
+              putInCache("user", userId, Some(user), LongCacheTTL)
+              logger.debug(s"Retrieved user from DB: $userId")
+            }
+            
+            logger.debug(s"Found ${dbUsers.size} users in DB, ${cachedUsers.size} in cache")
+            
+            // Return combined results
+            cachedUsers ++ dbUsers
+          }
         }
       }
     }
@@ -361,14 +573,51 @@ class DataManager(
    */
   def deleteUser(userId: Long): Future[Boolean] = {
     txManager.withTransaction { conn =>
+      // First delete related data
+      deleteUserRelatedData(conn, userId)
+      
+      // Then delete the user
       val sql = "DELETE FROM users WHERE user_id = ?"
       
       withPreparedStatement(conn, sql) { ps =>
         ps.setLong(1, userId)
         val count = ps.executeUpdate()
-        invalidateCache("user", userId)
-        count > 0
+        
+        if (count > 0) {
+          // Invalidate cache
+          invalidateCache("user", userId)
+          true
+        } else {
+          false
+        }
       }
+    }
+  }
+
+  /**
+   * Supprime les données liées à un utilisateur quand l'utilisateur est supprimé
+   */
+  private def deleteUserRelatedData(conn: Connection, userId: Long): Unit = {
+    // Supprimer les amitiés de l'utilisateur
+    val friendsSql = "DELETE FROM user_friends WHERE user_id = ? OR friend_id = ?"
+    withPreparedStatement(conn, friendsSql) { ps =>
+      ps.setLong(1, userId)
+      ps.setLong(2, userId)
+      ps.executeUpdate()
+    }
+    
+    // Supprimer les participations aux événements
+    val participationsSql = "DELETE FROM event_participations WHERE user_id = ?"
+    withPreparedStatement(conn, participationsSql) { ps =>
+      ps.setLong(1, userId)
+      ps.executeUpdate()
+    }
+    
+    // Supprimer les événements créés par l'utilisateur
+    val eventsSql = "DELETE FROM events WHERE created_by = ?"
+    withPreparedStatement(conn, eventsSql) { ps =>
+      ps.setLong(1, userId)
+      ps.executeUpdate()
     }
   }
   
@@ -605,15 +854,16 @@ class DataManager(
   def storeProcessedEvent(event: ProcessedEvent): Future[ProcessedEvent] = {
     txManager.withTransaction { conn =>
       val sql = """INSERT INTO processed_events(user_id, event_type, item_id, properties, timestamp, processing_timestamp) 
-                   VALUES(?, ?, ?, ?, ?, ?) RETURNING id"""
+                   VALUES(?, ?, ?, ?::jsonb, ?, ?) RETURNING id"""
       
       withPreparedStatement(conn, sql) { ps =>
         ps.setLong(1, event.userId)
         ps.setString(2, event.eventType)
         event.itemId match {
-          case Some(itemId) => ps.setLong(3, itemId)
+          case Some(id) => ps.setLong(3, id)
           case None => ps.setNull(3, java.sql.Types.BIGINT)
         }
+        // Utiliser ::jsonb pour forcer le cast
         ps.setString(4, io.circe.Encoder.encodeMap[String, String].apply(event.properties).noSpaces)
         ps.setLong(5, event.timestamp)
         ps.setLong(6, event.processingTimestamp)
@@ -633,11 +883,17 @@ class DataManager(
   /**
    * Get processed events for a user
    */
-  def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = {
+  def getProcessedEventsForUser(userId: Long, limit: Int = 100): Future[List[ProcessedEvent]] = handleDatabaseOperation {
     txManager.withTransaction { conn =>
       val sql = "SELECT * FROM processed_events WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?"
       
+      logger.debug(s"Executing query: $sql with userId=$userId, limit=$limit")
+      
       withPreparedStatement(conn, sql) { ps =>
+        if (ps == null) {
+          throw new SQLException("PreparedStatement is null")
+        }
+        
         ps.setLong(1, userId)
         ps.setInt(2, limit)
         
@@ -683,22 +939,19 @@ class DataManager(
    * Batch store processed events
    */
   def batchStoreProcessedEvents(events: List[ProcessedEvent]): Future[Int] = {
-    if (events.isEmpty) {
-      return Future.successful(0)
-    }
-    
     txManager.withTransaction { conn =>
-      val sql = """INSERT INTO processed_events(user_id, event_type, item_id, properties, timestamp, processing_timestamp) 
-                   VALUES(?, ?, ?, ?, ?, ?)"""
+      val sql = """INSERT INTO processed_events(user_id, event_type, item_id, properties, timestamp, processing_timestamp)
+                   VALUES(?, ?, ?, ?::jsonb, ?, ?)"""
       
       withPreparedStatement(conn, sql) { ps =>
         events.foreach { event =>
           ps.setLong(1, event.userId)
           ps.setString(2, event.eventType)
           event.itemId match {
-            case Some(itemId) => ps.setLong(3, itemId)
+            case Some(id) => ps.setLong(3, id)
             case None => ps.setNull(3, java.sql.Types.BIGINT)
           }
+          // Utiliser ::jsonb pour forcer le cast
           ps.setString(4, io.circe.Encoder.encodeMap[String, String].apply(event.properties).noSpaces)
           ps.setLong(5, event.timestamp)
           ps.setLong(6, event.processingTimestamp)
@@ -1003,13 +1256,13 @@ class DataManager(
       name = rs.getString("name"),
       description = Option(rs.getString("description")),
       startTime = rs.getLong("start_time"),
-      endTime = Option(rs.getObject("end_time")).map(_.asInstanceOf[java.lang.Long]),
+      endTime = Option(rs.getLong("end_time")).filter(_ != 0),
       location = Option(rs.getString("location")),
       createdBy = rs.getLong("created_by"),
       status = rs.getString("status"),
-      keywords = Option(rs.getString("keywords")).map(_.split(",").toList).getOrElse(List.empty),
-      keywordFrequencies = Map.empty,  // Would need separate query for keyword frequencies
-      participants = Set.empty  // Would need separate query for participants
+      keywords = List.empty,
+      keywordFrequencies = Map.empty,
+      participants = Set.empty
     )
   }
   
@@ -1067,7 +1320,7 @@ class DataManager(
   /**
    * Initialize database tables if they don't exist
    */
-  def initTables(): Future[Unit] = {
+  def initTables(): Future[Unit] = handleDatabaseOperation {
     txManager.withTransaction { conn =>
       val createTables = List(
         """CREATE TABLE IF NOT EXISTS users (

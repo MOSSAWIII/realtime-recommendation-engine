@@ -12,7 +12,7 @@ import scala.concurrent.ExecutionContext
  * All test classes should extend one of the specialized traits below.
  */
 trait TestBase {
-  implicit val ec: ExecutionContext = scala.concurrent.ExecutionContext.global
+  implicit val ec: ExecutionContext = ExecutionContext.global
 }
 
 /**
@@ -39,7 +39,7 @@ trait UnitWordSpecBase extends AnyWordSpec with Matchers with BeforeAndAfterEach
  * Base trait for integration tests
  */
 trait IntegrationTestBase extends AnyFlatSpec with Matchers with BeforeAndAfterAll with BeforeAndAfterEach with TestBase {
-  // Supprimé le code spécifique à l'environnement d'intégration - sera déplacé vers des classes spécialisées
+  // Pas de redéfinition d'ExecutionContext ici
 }
 
 /**

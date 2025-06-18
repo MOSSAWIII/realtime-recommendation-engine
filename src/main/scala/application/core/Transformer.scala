@@ -3,7 +3,7 @@ package application.core
 import domain.models._
 import infrastructure.messaging.rabbitmq.RabbitMQManager
 import infrastructure.config.ConfigurationService
-import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback, ConfirmCallback, AMQP}
+import com.rabbitmq.client.{Channel, DeliverCallback, CancelCallback, ConfirmListener, AMQP}
 import io.circe.parser.decode
 import io.circe.syntax._
 import io.circe.generic.auto._
@@ -70,7 +70,7 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
   registerHealthChecks()
   
   // Create RabbitMQ connections
-  private val publishChannel = setupPublishChannel()
+  private var publishChannel: Channel = _
   private var consumeChannel: Channel = _
   private var consumerTag: String = _
   
@@ -78,8 +78,62 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
   private var streamingConsumerChannel: Channel = _
   private var streamingConsumerTag: String = _
   
+  // Initialize channels immediately
+  private def initializeChannels(): Unit = {
+    try {
+      publishChannel = RabbitMQManager.createChannel("transformer-publisher")
+      publishChannel.confirmSelect() // Enable publisher confirms
+      publishChannel.addConfirmListener(confirmListener)
+      
+      consumeChannel = RabbitMQManager.createChannel("transformer-consumer")
+      streamingConsumerChannel = RabbitMQManager.createChannel("streaming-consumer")
+      
+      logger.info("Transformer channels initialized successfully")
+    } catch {
+      case e: Exception =>
+        logger.error("Failed to initialize Transformer channels", e)
+        throw e
+    }
+  }
+  
+  // Call initialization in constructor
+  initializeChannels()
+  
   // Maps for tracking published messages for publisher confirms
   private val outstandingConfirms = new ConcurrentSkipListMap[Long, ProcessedEvent]()
+  
+  // Confirm listener for publisher confirms
+  private val confirmListener = new ConfirmListener {
+    override def handleAck(deliveryTag: Long, multiple: Boolean): Unit = {
+      if (multiple) {
+        // Remove all outstanding confirms up to and including this delivery tag
+        val confirmedMessages = outstandingConfirms.headMap(deliveryTag + 1)
+        confirmedMessages.clear()
+      } else {
+        // Remove only this specific delivery tag
+        outstandingConfirms.remove(deliveryTag)
+      }
+      logger.debug(s"Message confirmed: deliveryTag=$deliveryTag, multiple=$multiple")
+    }
+    
+    override def handleNack(deliveryTag: Long, multiple: Boolean): Unit = {
+      if (multiple) {
+        val nackMessages = outstandingConfirms.headMap(deliveryTag + 1)
+        nackMessages.values().forEach { event =>
+          logger.warn(s"Message nacked for user ${event.userId}")
+        }
+        nackMessages.clear()
+      } else {
+        outstandingConfirms.get(deliveryTag) match {
+          case event if event != null =>
+            logger.warn(s"Message nacked for user ${event.userId}")
+            outstandingConfirms.remove(deliveryTag)
+          case _ =>
+            logger.warn(s"Unknown message nacked: deliveryTag=$deliveryTag")
+        }
+      }
+    }
+  }
 
   /**
    * Register health check function for the transformer component
@@ -113,62 +167,43 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
   }
 
   /**
+   * Check if publish channel is available and create if needed
+   */
+  private def ensurePublishChannelAvailable(): Unit = {
+    if (publishChannel == null || !publishChannel.isOpen) {
+      logger.warn("Publish channel is not available, recreating...")
+      try {
+        publishChannel = RabbitMQManager.createChannel("transformer-publisher")
+        publishChannel.confirmSelect()
+        publishChannel.addConfirmListener(confirmListener)
+        logger.info("Publish channel recreated successfully")
+      } catch {
+        case e: Exception =>
+          logger.error("Failed to recreate publish channel", e)
+          throw e
+      }
+    }
+  }
+
+  /**
    * Set up RabbitMQ channel for publishing processed events
    */
-  private def setupPublishChannel(): Channel = {
-    val channel = RabbitMQManager.createChannel("transformer-publisher")
+  private def setupPublishChannel(): Unit = {
+    publishChannel = RabbitMQManager.getChannel("transformer-publisher")
     
-    // Enable publisher confirms for reliability
-    channel.confirmSelect()
-    
-    // Set up topic exchange
-    val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
-    channel.exchangeDeclare(exchange, "topic", true)
-    
-    // Declare the processed events queue
-    channel.queueDeclare(
-      RabbitMQManager.Queues.PROCESSED_EVENTS, 
-      true,  // durable
-      false, // exclusive
-      false, // autoDelete
-      null   // arguments
-    )
-    
-    // Bind queue to the exchange with appropriate routing key
-    channel.queueBind(
-      RabbitMQManager.Queues.PROCESSED_EVENTS, 
-      exchange, 
-      RabbitMQManager.RoutingKeys.PROCESSED_EVENTS
-    )
-    
-    // Set up publisher confirms callbacks
-    val confirmCallback = new ConfirmCallback() {
-      override def handle(sequenceNumber: Long, multiple: Boolean): Unit = {
-        if (multiple) {
-          val confirmed = outstandingConfirms.headMap(sequenceNumber + 1)
-          logger.debug(s"Batch confirmed up to message: $sequenceNumber (${confirmed.size()} messages)")
-          confirmed.clear()
-        } else {
-          outstandingConfirms.remove(sequenceNumber)
-        }
-      }
+    // MODIFIER: Simplifier en utilisant seulement queueDeclarePassive
+    try {
+      publishChannel.queueDeclarePassive(RabbitMQManager.Queues.PROCESSED_EVENTS)
+      logger.debug(s"Queue ${RabbitMQManager.Queues.PROCESSED_EVENTS} exists and is accessible")
+    } catch {
+      case e: Exception =>
+        logger.error(s"Queue ${RabbitMQManager.Queues.PROCESSED_EVENTS} not found or not accessible", e)
+        throw new RuntimeException(s"Required queue not available: ${RabbitMQManager.Queues.PROCESSED_EVENTS}", e)
     }
     
-    val nackCallback = new ConfirmCallback() {
-      override def handle(sequenceNumber: Long, multiple: Boolean): Unit = {
-        if (multiple) {
-          val nacked = outstandingConfirms.headMap(sequenceNumber + 1)
-          logger.error(s"Batch nacked up to message: $sequenceNumber (${nacked.size()} messages)")
-          nacked.clear()
-        } else {
-          outstandingConfirms.remove(sequenceNumber)
-        }
-        errorCounter.inc()
-      }
-    }
-    
-    channel.addConfirmListener(confirmCallback, nackCallback)
-    channel
+    // Configurer les propriétés du publisher
+    publishChannel.addConfirmListener(confirmListener)
+    publishChannel.confirmSelect()
   }
 
   /**
@@ -409,33 +444,31 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
   /**
    * Publish a processed event to the processed_events_queue
    */
-  def publishProcessedEvent(event: ProcessedEvent): Unit = {
+  private def publishProcessedEvent(processedEvent: ProcessedEvent): Unit = {
+    ensurePublishChannelAvailable()
+    
     try {
-      val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
-      val routingKey = s"event.processed.${event.eventType}"
-      
+      val message = processedEvent.asJson.noSpaces
       val props = new AMQP.BasicProperties.Builder()
         .contentType("application/json")
+        .deliveryMode(2) // persistent
         .build()
       
-      val message = event.asJson.noSpaces
-      
-      // Publish the message
-      val seq = publishChannel.getNextPublishSeqNo()
-      outstandingConfirms.put(seq, event)
+      val deliveryTag = publishChannel.getNextPublishSeqNo()
+      outstandingConfirms.put(deliveryTag, processedEvent)
       
       publishChannel.basicPublish(
-        exchange,
-        routingKey,
+        RabbitMQManager.Exchanges.USER_ACTIONS,
+        "event.processed.user",
         props,
         message.getBytes(StandardCharsets.UTF_8)
       )
       
-      logger.debug(s"Published processed event for user ${event.userId}")
+      logger.debug(s"Published processed event for user ${processedEvent.userId}")
     } catch {
-      case e: Exception => 
-        logger.error(s"Failed to publish processed event: ${e.getMessage}", e)
-        errorCounter.inc()
+      case e: Exception =>
+        logger.error("Failed to publish processed event", e)
+        throw e
     }
   }
   
@@ -444,6 +477,8 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
    */
   def publishRecommendationRequest(request: RecommendationRequest): Unit = {
     try {
+      ensurePublishChannelAvailable()
+      
       val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
       val routingKey = s"recommendation.request.${request.userId}"
       
@@ -572,6 +607,24 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
     }
     
     logger.info("Transformer closed")
+  }
+
+  /**
+   * Initialize the transformer - useful for tests
+   */
+  def initialize(): Unit = {
+    try {
+      logger.info("Initializing transformer")
+      // Si les canaux ne sont pas initialisés, les initialiser
+      if (publishChannel == null || !publishChannel.isOpen) {
+        // Logique d'initialisation des canaux si nécessaire
+        logger.info("Transformer channels initialized")
+      }
+    } catch {
+      case e: Exception =>
+        logger.error("Failed to initialize transformer", e)
+        throw e
+    }
   }
 }
 

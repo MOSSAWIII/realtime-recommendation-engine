@@ -2,7 +2,7 @@ package unit.application.core
 
 import application.core.{Recommender, DataManager}
 import common.base.UnitSpec
-import common.mocks.{MockDataManager, TestRepository}
+import common.mocks.{MockDataManager, TestRepository, TestConfigurationService, TestDatabaseProvider}
 import domain.models._
 import org.mockito.Mockito._
 import org.scalatest.BeforeAndAfterEach
@@ -21,6 +21,12 @@ class RecommenderSpec extends UnitSpec with BeforeAndAfterEach {
   "Recommender" should "generate recommendations based on user history" in {
     // Arrange
     val mockRepo = new TestRepository()
+    
+    // Corriger la création du DataManager mock - utiliser 'ec' depuis BaseSpec
+    val mockDataManager = new MockDataManager(
+      new TestConfigurationService(),
+      new TestDatabaseProvider()
+    )(ec) // Utiliser l'ec hérité
     
     // Ajouter des données de test
     val userId = 123L

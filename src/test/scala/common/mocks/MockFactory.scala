@@ -1,10 +1,12 @@
 package common.mocks
 
+import scala.concurrent.ExecutionContext
+import java.util.concurrent.CountDownLatch
+import infrastructure.config.{ConfigurationServiceInterface, DatabaseConfigProvider}
 import org.mockito.Mockito._
 import org.mockito.ArgumentMatchers._
 import com.rabbitmq.client.{Channel, Connection}
 import java.sql.{Connection => SqlConnection}
-import scala.concurrent.ExecutionContext
 
 /**
  * Factory centralisée pour la création de tous les mocks
@@ -16,7 +18,7 @@ object RabbitMQTestManager {
 }
 
 object MockFactory {
-  // Contexte d'exécution partagé pour tous les tests
+  // Ajouter ExecutionContext implicite global
   implicit val testExecutionContext: ExecutionContext = ExecutionContext.global
   
   // Configuration
@@ -30,11 +32,17 @@ object MockFactory {
   }
   
   // DataManager
-  def createDataManager(withLatch: Boolean = false): MockDataManager = {
-    val configService = createConfigService()
-    val dbProvider = createDatabaseProvider()
-    val latch = if (withLatch) new java.util.concurrent.CountDownLatch(1) else null
-    new MockDataManager(configService, dbProvider, latch)(testExecutionContext)
+  def createDataManager()(implicit ec: ExecutionContext = ExecutionContext.global): MockDataManager = {
+    val configService = new TestConfigurationService()
+    val dbProvider = new TestDatabaseProvider()
+    
+    // ASSURER que l'objet est complètement initialisé
+    val mockDataManager = new MockDataManager(configService, dbProvider)(ec)
+    
+    // Initialisation de base pour éviter les null
+    mockDataManager.initializeMockData()
+    
+    mockDataManager
   }
   
   // RabbitMQ

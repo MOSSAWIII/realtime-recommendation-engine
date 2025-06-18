@@ -123,8 +123,11 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
     activeTransactions.put(transactionId, txInfo)
     
     Future {
+      // Déclarer originalAutoCommit en dehors du bloc try pour qu'il soit visible dans finally
+      var originalAutoCommit = true
       try {
-        val originalAutoCommit = conn.getAutoCommit
+        // Capturer la valeur initiale avant de la modifier
+        originalAutoCommit = conn.getAutoCommit
         conn.setAutoCommit(false)
         
         val result = operation(conn)
@@ -158,12 +161,18 @@ class DataManagerTransactions(dataManager: DataManager)(implicit ec: ExecutionCo
           ))
       } finally {
         try {
-          conn.close()
+          // Ensure we always set autoCommit back to its original value
+          if (!conn.isClosed) {
+            conn.setAutoCommit(originalAutoCommit)
+            conn.close()
+          }
           logger.debug(s"Connection closed for transaction $transactionId")
         } catch {
           case e: SQLException =>
             logger.warn(s"Failed to close connection for transaction $transactionId: ${e.getMessage}")
         }
+        // Ensure the transaction is removed from activeTransactions
+        activeTransactions.remove(transactionId)
       }
     }
   }
