@@ -64,7 +64,7 @@ class TransformerSpec extends UnitSpec {
   class TransformerUnderTest(dataManager: DataManager) extends Transformer(dataManager)(ec) {
     var recommendationRequests: List[RecommendationRequest] = List.empty
     
-    override def publishRecommendationRequest(request: RecommendationRequest): Unit = {
+    def publishRecommendationRequest(request: RecommendationRequest): Unit = {
       recommendationRequests = request :: recommendationRequests
     }
     

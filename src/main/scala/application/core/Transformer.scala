@@ -10,7 +10,8 @@ import io.circe.generic.auto._
 import java.nio.charset.StandardCharsets
 import java.sql.{Connection, PreparedStatement, ResultSet}
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future, Await}
+import scala.concurrent.duration._
 import scala.util.{Try, Success, Failure}
 import org.slf4j.LoggerFactory
 import utils.metrics.{MetricsRegistry, HealthCheckRegistry, SystemStatus, HealthStatus, HealthCheckResult}
@@ -394,37 +395,77 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
   }
 
   /**
+   * Validate a user event before processing
+   */
+  private def validateEvent(event: UserEvent): Unit = {
+    if (event.userId <= 0) {
+      throw new IllegalArgumentException("User ID must be positive")
+    }
+    
+    if (event.eventType == null || event.eventType.trim.isEmpty) {
+      throw new IllegalArgumentException("Event type cannot be null or empty")
+    }
+    
+    if (event.timestamp <= 0) {
+      throw new IllegalArgumentException("Timestamp must be positive")
+    }
+    
+    // Additional validation rules can be added here
+    val validEventTypes = Set("view", "click", "purchase", "like", "share", "comment")
+    if (!validEventTypes.contains(event.eventType.toLowerCase)) {
+      logger.warn(s"Unknown event type: ${event.eventType}")
+    }
+  }
+
+  /**
    * Process a user event by transforming it to a processed event
    * and publishing it to the processed_events_queue
    *
-   * @param userEvent The raw user event to process
+   * @param event The raw user event to process
    * @return A future containing the processed event
    */
-  def processEvent(userEvent: UserEvent): Future[ProcessedEvent] = {
+  def processEvent(event: UserEvent): Future[ProcessedEvent] = {
+    logger.debug(s"Processing user event for user ${event.userId}")
+    
     val startTime = System.nanoTime()
     
-    try {
-      // Transform the event
-      val processedEvent = transformEvent(userEvent)
-      
-      // Publish to the queue
-      publishProcessedEvent(processedEvent)
-      
-      // If this is an event with an item, trigger recommendation
-      if (userEvent.itemId.isDefined) {
-        publishRecommendationRequest(RecommendationRequest(userEvent.userId, Some(userEvent.itemId.get)))
+    Future {
+      try {
+        // Validate the event
+        validateEvent(event)
+        
+        // Create processed event
+        val processedEvent = ProcessedEvent(
+          id = None,
+          userId = event.userId,
+          eventType = event.eventType,
+          itemId = event.itemId,
+          properties = event.properties.getOrElse(Map.empty),
+          timestamp = event.timestamp,
+          processingTimestamp = System.currentTimeMillis()
+        )
+        
+        // Store in DataManager
+        Await.result(dataManager.storeProcessedEvent(processedEvent), 5.seconds)
+        
+        // Publish only the ProcessedEvent
+        publishProcessedEvent(processedEvent)
+        
+        // Update metrics
+        val endTime = System.nanoTime()
+        val processingTime = (endTime - startTime) / 1000000
+        updateMetrics(processingTime, success = true)
+        
+        processedEvent
+      } catch {
+        case e: Exception =>
+          val endTime = System.nanoTime()
+          val processingTime = (endTime - startTime) / 1000000
+          updateMetrics(processingTime, success = false)
+          
+          logger.error(s"Error processing event: ${e.getMessage}", e)
+          throw e
       }
-      
-      val processingTime = (System.nanoTime() - startTime) / 1000000 // Convert to milliseconds
-      messageProcessingTimer.recordMillis(processingTime)
-      updateMetrics(processingTime)
-      
-      Future.successful(processedEvent)
-    } catch {
-      case e: Exception =>
-        logger.error(s"Error processing event: ${e.getMessage}", e)
-        errorCounter.inc()
-        Future.failed(e)
     }
   }
 
@@ -471,47 +512,17 @@ class Transformer(dataManager: DataManager)(implicit ec: ExecutionContext) exten
         throw e
     }
   }
-  
-  /**
-   * Publish a recommendation request
-   */
-  def publishRecommendationRequest(request: RecommendationRequest): Unit = {
-    try {
-      ensurePublishChannelAvailable()
-      
-      val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
-      val routingKey = s"recommendation.request.${request.userId}"
-      
-      val props = new AMQP.BasicProperties.Builder()
-        .contentType("application/json")
-        .build()
-      
-      val message = request.asJson.noSpaces
-      
-      publishChannel.basicPublish(
-        exchange,
-        routingKey,
-        props,
-        message.getBytes(StandardCharsets.UTF_8)
-      )
-      
-      logger.debug(s"Published recommendation request for user ${request.userId}")
-    } catch {
-      case e: Exception => 
-        logger.error(s"Failed to publish recommendation request: ${e.getMessage}", e)
-        errorCounter.inc()
-    }
-  }
 
   /**
    * Update metrics with processing time
    */
-  private def updateMetrics(processingTime: Long): Unit = {
+  private def updateMetrics(processingTime: Long, success: Boolean): Unit = {
     this.synchronized {
       totalProcessed += 1
       totalProcessingTime += processingTime
       minProcessingTime = Math.min(minProcessingTime, processingTime)
       maxProcessingTime = Math.max(maxProcessingTime, processingTime)
+      if (!success) errorCounter.inc()
     }
   }
   

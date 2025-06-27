@@ -149,9 +149,8 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
       // Initialize queues
       configureQueues()
       
-      // Start consumers - REMOVE recommendation request consumer
-      // startRecommendationRequestConsumer()  // ❌ REMOVE THIS LINE
-      startProcessedEventsConsumer()          // ✅ This now handles both cache updates AND recommendations
+      // ✅ MODIFICATION MAJEURE : Un seul consumer ProcessedEvents avec Smart Triggering
+      startProcessedEventsConsumer()          // ✅ Gère cache + recommendations
       startDataManagerSyncConsumer()
       
       // Schedule background tasks
@@ -170,7 +169,7 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
         throw e
     }
   }
-  
+
   /**
    * Configures RabbitMQ queues
    */
@@ -202,10 +201,10 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
         decode[ProcessedEvent](message) match {
           case Right(event) =>
             try {
-              // 1. Update in-memory model (existing logic)
+              // 1. Toujours mettre à jour le cache (comportement existant)
               updateUserEventCache(event)
               
-              // 2. NEW: Smart triggering logic
+              // 2. ✅ NOUVEAU : Smart triggering avec logique métier
               if (shouldTriggerRecommendation(event)) {
                 logger.debug(s"Triggering recommendation for user ${event.userId} based on processed event")
                 
@@ -215,21 +214,23 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
                   timestamp = System.currentTimeMillis()
                 )
                 
-                // Generate and publish recommendation immediately
+                // 3. Générer et publier immédiatement avec routing spécifique
                 val recommendationsFuture = generateRecommendations(request)
                   .map { recommendations =>
-                    // Publish recommendations
-                    publishRecommendation(recommendations)
+                    // ✅ CLEF : Publier avec routing key spécifique à l'utilisateur
+                    publishRecommendationWithRouting(recommendations, event.userId)
                     recommendations
                   }
                 
-                // Handle the future asynchronously to not block the consumer
+                // Handle async sans bloquer le consumer
                 recommendationsFuture.onComplete {
                   case Success(recommendation) =>
                     logger.debug(s"Generated recommendation for user ${event.userId} from processed event")
                   case Failure(e) =>
                     logger.error(s"Failed to generate recommendation for user ${event.userId}: ${e.getMessage}", e)
                 }
+              } else {
+                logger.debug(s"Skipping recommendation for user ${event.userId} - event type ${event.eventType} doesn't meet criteria")
               }
               
               channelConsumer.basicAck(delivery.getEnvelope.getDeliveryTag, false)
@@ -275,16 +276,60 @@ class Recommender(private val dataManager: DataManager)(implicit val ec: Executi
   }
 
   /**
-   * NEW: Determine if a processed event should trigger a recommendation
+   * ✅ NOUVEAU : Logique de déclenchement intelligente
    */
   private def shouldTriggerRecommendation(event: ProcessedEvent): Boolean = {
-    // Simple strategy for immediate fix: trigger on all major events
+    // Stratégie configurable selon le contexte
     event.eventType match {
-      case "view" | "click" | "like" | "share" | "purchase" => true
-      case _ => false
+      case "view" | "click" | "like" | "share" | "purchase" => true      // Actions importantes
+      case "hover" | "scroll" => shouldTriggerForLightAction(event)      // Actions légères conditionnelles
+      case _ => false                                                     // Actions ignorées
     }
   }
-  
+
+  /**
+   * ✅ NOUVEAU : Logique conditionnelle pour actions légères
+   */
+  private def shouldTriggerForLightAction(event: ProcessedEvent): Boolean = {
+    // Vérifier l'activité récente de l'utilisateur
+    val recentEvents = recentUserEvents.get(event.userId)
+      .map(_.toList.filter(e => (System.currentTimeMillis() - e.timestamp) < 300000)) // 5 minutes
+      .getOrElse(List.empty)
+    
+    // Déclencher seulement si peu d'activité récente
+    recentEvents.size < 3
+  }
+
+  /**
+   * ✅ NOUVEAU : Publication avec routing spécifique par utilisateur
+   */
+  private def publishRecommendationWithRouting(recommendation: Recommendation, userId: Long): Unit = {
+    try {
+      val message = recommendation.asJson.noSpaces
+      
+      val props = new AMQP.BasicProperties.Builder()
+        .contentType("application/json")
+        .deliveryMode(2) // persistent
+        .timestamp(new java.util.Date())
+        .build()
+
+      // ✅ CLEF : Routing key spécifique à l'utilisateur
+      val routingKey = s"recommendation.result.${userId}"
+      
+      channelPublisher.basicPublish(
+        RabbitMQManager.Exchanges.USER_ACTIONS,
+        routingKey,
+        props,
+        message.getBytes(StandardCharsets.UTF_8)
+      )
+      
+      logger.info(s"Published recommendations for user ${userId} with routing key: ${routingKey}")
+    } catch {
+      case e: Exception => 
+        logger.error(s"Error publishing recommendation: ${e.getMessage}", e)
+    }
+  }
+
   /**
    * Starts the consumer for DataManager sync messages
    */

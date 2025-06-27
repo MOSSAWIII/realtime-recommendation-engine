@@ -51,53 +51,71 @@ class MockDataManager(
   }
   
   /**
-   * Initialise des données mockées pour les tests
+   * ✅ NOUVEAU : Méthode pour nettoyer les données mock
    */
-  def initializeMockData(): Unit = {
-    val baseItemId = TestResourceManager.uniqueId()
-    println(s"Initializing mock data with test item ID: $baseItemId") // Remplacer logger.info
+  def clearMockData(): Unit = {
+    mockEvents.clear()
+    mockProcessedEvents.clear()
+    mockRecommendations.clear()
+    mockUsers.clear()
+    mockItems.clear()
+    mockUserFriends.clear()
+    storedProcessedEvents.clear()
+    mockUserEvents.clear()
     
-    // Initialiser les événements mock
-    val mockEvent1 = Event(
+    logger.debug("Mock data cleared")
+  }
+
+  /**
+   * ✅ MODIFICATION : Initialisation avec itemId spécifique
+   */
+  def initializeMockData(baseItemId: Long = 1000L): Unit = {
+    clearMockData()
+    
+    logger.debug(s"Initializing mock data with base item ID: $baseItemId")
+    
+    // Créer des données avec des IDs basés sur baseItemId pour éviter les conflits
+    val event1 = Event(
       id = Some(baseItemId),
-      name = s"Test Event $baseItemId",
-      description = Some("Test event description"),
-      startTime = System.currentTimeMillis() + 86400000,
-      endTime = Some(System.currentTimeMillis() + 172800000),
+      name = s"Test Event ${baseItemId}",
+      description = Some(s"Description for event ${baseItemId}"),
+      startTime = System.currentTimeMillis() + 10000,
+      endTime = Some(System.currentTimeMillis() + 20000),
       location = Some("Test Location"),
-      createdBy = 1L,
+      createdBy = 1001,
       status = "active"
     )
-    val mockEvent2 = Event(
+    
+    val event2 = Event(
       id = Some(baseItemId + 1),
       name = s"Test Event ${baseItemId + 1}",
-      description = Some("Another test event"),
-      startTime = System.currentTimeMillis() + 172800000,
-      endTime = Some(System.currentTimeMillis() + 259200000),
-      location = Some("Another Test Location"),
-      createdBy = 2L,
+      description = Some(s"Description for event ${baseItemId + 1}"),
+      startTime = System.currentTimeMillis() + 15000,
+      endTime = Some(System.currentTimeMillis() + 25000),
+      location = Some("Test Location 2"),
+      createdBy = 1002,
       status = "active"
     )
     
-    addEvent(mockEvent1)
-    addEvent(mockEvent2)
+    mockEvents.put(baseItemId, event1)
+    mockEvents.put(baseItemId + 1, event2)
     
-    // Initialiser les utilisateurs mock
-    val mockUser = User(
-      userId = 12345L,
+    // Créer un utilisateur test avec un ID unique
+    val testUser = User(
+      userId = 1001L,
       name = Some("Test User"),
       emailAddress = Some("test@example.com"),
       locale = "en_US",
       birthYear = Some(1990),
       gender = Some("M"),
-      location = Some("Test City"),
+      location = Some("Paris, France"),
       timezone = Some(1),
       isGenerated = false
     )
     
-    addUser(mockUser)
+    mockUsers.put(1001L, testUser)
     
-    println(s"Mock data initialized with ${mockEvents.size} events and ${mockUsers.size} users") // Remplacer logger.info
+    logger.debug(s"Mock data initialized with ${mockEvents.size} events and ${mockUsers.size} users")
   }
   
   // Méthodes pour accéder aux données de test

@@ -1,9 +1,8 @@
-export TEST_RUN_ID=1750256043_d744f35e
-export TEST_VHOST=test_env_1750256043_d744f35e
+export TEST_RUN_ID=1750258611_6ceafab0
+export TEST_VHOST=test_env_1750258611_6ceafab0
 export TEST_EXCHANGE=user_actions_exchange
 export TEST_PROCESSED_EVENTS_QUEUE=processed_events_queue
 export TEST_RECOMMENDATIONS_QUEUE=recommendations_queue
-export TEST_RECOMMENDATION_REQUESTS_QUEUE=recommendation_requests_queue
 export TEST_HISTORICAL_DATA_QUEUE=historical_data_queue
 export TEST_DLX_EXCHANGE=dlx
 export TEST_DLX_QUEUE=dead_letter_queue

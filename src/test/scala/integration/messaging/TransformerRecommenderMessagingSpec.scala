@@ -215,6 +215,40 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     
     consumeChannel.basicConsume(queueName, true, deliverCallback, (_: String) => {})
   }
+
+  private def setupRecommendationConsumerWithFiltering(expectedUserId: Long): Unit = {
+    val queueName = sys.env.getOrElse("TEST_RECOMMENDATIONS_QUEUE", "recommendations_queue")
+    
+    val routingKey = s"recommendation.result.${expectedUserId}"
+    val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
+    
+    consumeChannel.queueBind(queueName, exchange, routingKey)
+    
+    val deliverCallback = new DeliverCallback {
+      override def handle(consumerTag: String, delivery: com.rabbitmq.client.Delivery): Unit = {
+        val message = new String(delivery.getBody, StandardCharsets.UTF_8)
+        logger.debug(s"Received recommendation: $message")
+        
+        decode[Recommendation](message) match {
+          case Right(recommendation) =>
+            if (recommendation.userId == expectedUserId) {
+              logger.info(s"TEST CONSUMER: Received recommendation for expected user ${expectedUserId}")
+              if (recommendationPromise != null && !recommendationPromise.isCompleted) {
+                recommendationPromise.success(recommendation)
+                logger.info("TEST CONSUMER: Promise completed for correct user")
+              }
+            } else {
+              logger.debug(s"TEST CONSUMER: Ignoring recommendation for user ${recommendation.userId} (expected: ${expectedUserId})")
+            }
+          case Left(error) =>
+            logger.error(s"Failed to decode recommendation: $error")
+        }
+      }
+    }
+    
+    consumeChannel.basicConsume(queueName, true, deliverCallback, (_: String) => {})
+    logger.info(s"Set up filtered recommendation consumer for user ${expectedUserId} with routing key: ${routingKey}")
+  }
   
   private def registerHealthChecks(): Unit = {
     HealthCheckRegistry.register(
@@ -266,9 +300,12 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     processedEventPromise = Promise[ProcessedEvent]()
     recommendationPromise = Promise[Recommendation]()
     
-    val testItemId = 67890L
+    val testItemId = System.currentTimeMillis() // ✅ Unique par test
+    
     if (dataManager != null) {
-      dataManager.initializeMockData()
+      // ✅ NOUVEAU : Nettoyer les données existantes avant d'initialiser
+      dataManager.clearMockData()
+      dataManager.initializeMockData(testItemId)
     }
   }
 
@@ -294,15 +331,17 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     }
   }
 
-  "Transformer and Recommender messaging integration" should "process user events end-to-end" in {
+  "Transformer and Recommender messaging integration" should "process user events end-to-end with event-driven smart triggering" in {
     require(transformer != null, "Transformer must be initialized")
     require(recommender != null, "Recommender must be initialized")
     
-    processedEventPromise = Promise[ProcessedEvent]()
-    recommendationPromise = Promise[Recommendation]()
-    
     val testUserId = 12345L
     val testItemId = 67890L
+    
+    setupRecommendationConsumerWithFiltering(testUserId)
+    
+    processedEventPromise = Promise[ProcessedEvent]()
+    recommendationPromise = Promise[Recommendation]()
     
     val userEvent = UserEvent(
       userId = testUserId,
@@ -323,13 +362,12 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     
     logger.info("User event processed successfully")
     
-    val receivedProcessedEvent = Await.result(processedEventPromise.future, 20.seconds)
+    val receivedProcessedEvent = Await.result(processedEventPromise.future, 10.seconds)
     receivedProcessedEvent.userId shouldBe testUserId
     
     logger.info("Processed event received via RabbitMQ")
     
-    // Wait for recommendation to be generated automatically
-    val receivedRecommendation = Await.result(recommendationPromise.future, 10.seconds)
+    val receivedRecommendation = Await.result(recommendationPromise.future, 15.seconds)
     
     receivedRecommendation.userId shouldBe testUserId
     receivedRecommendation.recommendedItems should not be empty
@@ -338,7 +376,7 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     
     val recommendedItemIds = receivedRecommendation.recommendedItems.map(_.itemId)
     recommendedItemIds should contain atLeastOneElementOf dataManager.getMockEvents().flatMap(_.id)
-    logger.info("End-to-end messaging test completed successfully")
+    logger.info("End-to-end event-driven messaging test completed successfully")
   }
   
   it should "handle multiple concurrent user events" in {
@@ -363,79 +401,39 @@ class TransformerRecommenderMessagingSpec extends AnyFlatSpec with Matchers
     logger.info("Concurrent event processing test completed")
   }
   
-  private def publishRecommendationRequest(request: RecommendationRequest): Unit = {
-    val exchange = RabbitMQManager.Exchanges.USER_ACTIONS
-    val routingKey = s"recommendation.request.${request.userId}"
-    
-    val props = new AMQP.BasicProperties.Builder()
-      .contentType("application/json")
-      .build()
-    
-    val message = request.asJson.noSpaces
-    
-    publishChannel.basicPublish(
-      exchange,
-      routingKey,
-      props,
-      message.getBytes(StandardCharsets.UTF_8)
-    )
-    
-    logger.debug(s"Published recommendation request: $message")
-  }
-  
-  private def publishTestUserEvent(event: UserEvent): Unit = {
-    val message = s"""{"userId":${event.userId},"eventType":"${event.eventType}","itemId":${event.itemId.getOrElse("null")},"timestamp":${System.currentTimeMillis()}}"""
-    
-    val props = new AMQP.BasicProperties.Builder()
-      .contentType("application/json")
-      .build()
-    
-    publishChannel.basicPublish(
-      sys.env.getOrElse("TEST_EXCHANGE", "user_actions_exchange"),
-      "user.actions.view",
-      props,
-      message.getBytes("UTF-8")
-    )
-  }
-  
-  "complete messaging flow" should "process events through transformer and recommender" in {
+  "complete messaging flow" should "process events through transformer and recommender with smart triggering" in {
     val testUserId = 12345L
     val testItemId = 67890L
     
+    setupRecommendationConsumerWithFiltering(testUserId)
+    
+    processedEventPromise = Promise[ProcessedEvent]()
+    recommendationPromise = Promise[Recommendation]()
+    
     val userEvent = UserEvent(
       userId = testUserId,
-      eventType = "view",
+      eventType = "click",
       itemId = Some(testItemId),
       properties = Some(Map("category" -> "movie", "rating" -> "5")),
       timestamp = System.currentTimeMillis()
     )
     
+    logger.info(s"Processing user event for user $testUserId")
+    
     val processedEventFuture = transformer.processEvent(userEvent)
     val processedEvent = Await.result(processedEventFuture, 5.seconds)
     
     processedEvent.userId shouldBe testUserId
-    processedEvent.eventType shouldBe "view"
+    processedEvent.eventType shouldBe "click"
     processedEvent.itemId shouldBe Some(testItemId)
     
     logger.info("User event processed successfully")
     
-    processedEventPromise = Promise[ProcessedEvent]()
     val receivedProcessedEvent = Await.result(processedEventPromise.future, 10.seconds)
     receivedProcessedEvent.userId shouldBe testUserId
     
     logger.info("Processed event received via RabbitMQ")
     
-    val recommendationRequest = RecommendationRequest(
-      userId = testUserId,
-      contextItemId = Some(testItemId),
-      timestamp = System.currentTimeMillis()
-    )
-    
-    publishRecommendationRequest(recommendationRequest)
-    
-    logger.info("Recommendation request published")
-    
-    recommendationPromise = Promise[Recommendation]()
     val receivedRecommendation = Await.result(recommendationPromise.future, 15.seconds)
     
     receivedRecommendation.userId shouldBe testUserId
