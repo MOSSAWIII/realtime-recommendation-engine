@@ -328,7 +328,7 @@ else
       ;;
     "specific:"*)
       # Check if the specific test is an integration test
-      if [[ "$TEST_TYPE" == *"integration."* || "$TEST_TYPE" == *"functional."* || "$TEST_TYPE" == *"Messaging"* ]]; then
+      if [[ "$TEST_TYPE" == *"integration."* || "$TEST_TYPE" == *"functional."* || "$TEST_TYPE" == *"Messaging"* || "$TEST_TYPE" == *"demo."* ]]; then
         NEEDS_CONTAINERS=true
       fi
       ;;
