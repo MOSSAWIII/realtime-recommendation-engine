@@ -69,4 +69,4 @@ dump.rdb
 
 ### Local Configuration ###
 .env
-*.conf.local
+*.conf.localdatabase/*.csv
